@@ -317,6 +317,17 @@ function install_seclists {
     echo
 }
 
+function install_custom-dns-resolver {
+    echo "#### Installing Custom-dns-resolvers ####"
+    if [ ! -f "$WORDLISTS_DIR"/rockyou.txt ]; then
+        wget https://raw.githubusercontent.com/ghost11411/custom-dns-resolvers/main/dns-resolvers-custom -P "$WORDLISTS_DIR" 2>/dev/null
+        echo "DNS-Resolver Installed"
+    else
+        echo "Already Exists"
+    fi
+    echo
+}
+
 function install_tools {
     make_bin_folder
     make_temp
@@ -338,6 +349,7 @@ function install_tools {
     install_best_dns_wordlist
     install_all_txt
     #install_seclists
+    install_custom-dns-resolver
     rm -r "$TEMP_DIR"
 }
 

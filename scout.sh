@@ -107,11 +107,12 @@ echo
 while read -r line; do
     res=$(host -t a $line)
     if [ $(echo $res | cut -d ' ' -f 3) == 'no' ]; then
-        echo "Not Found $line"
+        echo "Not Found $WILDCARDS"
     else
-        whois $(echo $res | cut -d ' ' -f 4) | grep "CIDR" | cut -d ':' -f 2 >> $SUBDOMAINS/ip_block
-        sed "s/^[ \t]*//" -i $SUBDOMAINS/ip_block
-        whois $($SUBDOMAINS/ip_block) | grep "CIDR" >> "$SUBDOMAINS"/cidr
+        whois $(echo $res | cut -d ' ' -f 4) | grep "CIDR" | cut -d ':' -f 2 >> $SUBDOMAINS_DIR/ip_block
+        sed "s/^[ \t]*//" -i $SUBDOMAINS_DIR/ip_block
+        whois $($SUBDOMAINS_DIR/ip_block) | grep "CIDR" >> $SUBDOMAINS_DIR/cidr
+    fi
     sleep 2
 done < "$WILDCARDS"
 
@@ -121,7 +122,7 @@ while read -r line; do
 done < "$SUBDOMAINS"/cidr
 
 echo "#### Running Amass ####"
-# # "$AMASS_BIN" intel -whois -df in-scope -o "$AMASS_INTEL_OUT"              # Find Root Domains
+# "$AMASS_BIN" intel -whois -df in-scope -o "$AMASS_INTEL_OUT"              # Find Root Domains
 "$AMASS_BIN" enum -passive -df $WILDCARDS -timeout 10 -o "$AMASS_ENUM_OUT"      # Find Subdomains
 echo
 
@@ -165,7 +166,7 @@ echo "#### Running HTTProbe ####"
 if [ -f "$DNS_ACTIVE_SORTED" ]; then
   echo -e "$OKGREEN DNS Active File Found $RESET"
   touch "$ACTIVE"
-  cat "$DNS_ACTIVE" | "$HTTPROBE_BIN" -prefer-https > "$ACTIVE"
+  cat "$DNS_ACTIVE_SORTED" | "$HTTPROBE_BIN" -prefer-https > "$ACTIVE"
   sort "$ACTIVE" > "$ACTIVE_SORTED"
   echo "Done"
 else
