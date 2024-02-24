@@ -9,7 +9,6 @@ function get_company {
   echo
 }
 
-
 #VARS
 RESET=$(tput sgr0)
 OKBOLD=$(tput bold)
@@ -177,47 +176,47 @@ function get_asn_cidr {
 
 function run_amass {
   echo "$OKBOLD$OKBLUE#### Running Amass ####$RESET"
-  # "$AMASS_BIN" intel -whois -df in-scope -o "$AMASS_INTEL_OUT"              # Find Root Domains
-  "$AMASS_BIN" enum -passive -df "$WILDCARDS" -o "$AMASS_ENUM_OUT"      # Find Subdomains
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $AMASS_ENUM_OUT)"
+  # "$AMASS_BIN" intel -whois -df in-scope -o "$AMASS_INTEL_OUT"                   # Find Root Domains
+  "$AMASS_BIN" enum -passive -df "$WILDCARDS" -o "$AMASS_ENUM_OUT" &>/dev/null     # Find Subdomains
+  echo -e "$OKBOLD$OKGREEN""[+] Amass Found:$RESET $(wc -l < $AMASS_ENUM_OUT)"
   echo
 }
 
 function run_subfinder {
   echo "$OKBOLD$OKBLUE#### Running SubFinder ####$RESET"
-  "$SUBFINDER_BIN" -dL "$WILDCARDS" -all -t 100 -silent -o "$SUBFINDER_OUT"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $SUBFINDER_BIN)"
+  "$SUBFINDER_BIN" -dL "$WILDCARDS" -all -t 100 -silent -o "$SUBFINDER_OUT" &>/dev/null
+  echo -e "$OKBOLD$OKGREEN""[+] SubFinder Found:$RESET $(wc -l < $SUBFINDER_BIN)"
   echo
 }
 
 function run_assetfinder {
   echo "$OKBOLD$OKBLUE#### Running AssetFinder ####$RESET"
-  cat "$WILDCARDS" | "$ASSETFINDER_BIN" -subs-only > "$ASSETFINDER_OUT"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $ASSETFINDER_OUT)"
+  cat "$WILDCARDS" | "$ASSETFINDER_BIN" -subs-only | $ANEW_BIN "$ASSETFINDER_OUT" &>/dev/null
+  echo -e "$OKBOLD$OKGREEN""[+] AssetFinder Found:$RESET $(wc -l < $ASSETFINDER_OUT)"
   echo
 }
 
 function run_findomain {
   echo "$OKBOLD$OKBLUE#### Running FindDomain ####$RESET"
-  "$FINDOMAIN_BIN" -f "$WILDCARDS" -q -u "$FINDDOMAIN_OUT"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $FINDDOMAIN_OUT)"
+  "$FINDOMAIN_BIN" -f "$WILDCARDS" -q -u "$FINDDOMAIN_OUT" &>/dev/null
+  echo -e "$OKBOLD$OKGREEN""[+] FinDomain Found:$RESET $(wc -l < $FINDDOMAIN_OUT)"
   echo
 }
 
 function run_others {
   echo "$OKBOLD$OKBLUE#### Running GAU & WayBackURL####$RESET"
   while read -r line; do
-    "$GAU_BIN" --threads 100 --subs "$line" > "$GAU_OUT"
-    "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_GAU_OUT"
-    "$WAYBACKURL_BIN" "$line" > "$WAYBACKURL_OUT"
-    "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_WAYBACKURL_OUT"
-    curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$line&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u -o "$RAW_DIR"/wayback-"$line".out
-    curl -sk "https://crt.sh/?q=%.$line&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u -o "$RAW_DIR"/crt-"$line".out
+    "$GAU_BIN" --threads 50 --subs "$line" | "$ANEW_BIN" "$GAU_OUT" &>/dev/null
+    cat "$GAU_OUT" | "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_GAU_OUT" &>/dev/null
+    "$WAYBACKURL_BIN" "$line" | "$ANEW_BIN" "$WAYBACKURL_OUT" &>/dev/null
+    cat "$WAYBACKURL_OUT" | "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_WAYBACKURL_OUT" &>/dev/null
+    curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$line&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u -o "$RAW_DIR"/wayback-"$line".out &>/dev/null
+    curl -sk "https://crt.sh/?q=%.$line&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u -o "$RAW_DIR"/crt-"$line".out &>/dev/null
   done < "$WILDCARDS"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $GAU_OUT)"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $SUBD_GAU_OUT)"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $WAYBACKURL_OUT)"
-  echo -e "$OKGREEN""[+] JS:$RESET $(wc -l < $SUBD_WAYBACKURL_OUT)"
+  echo -e "$OKBOLD$OKGREEN""[+] Gau:$RESET $(wc -l < $GAU_OUT)"
+  echo -e "$OKBOLD$OKGREEN""[+] Gau Found:$RESET $(wc -l < $SUBD_GAU_OUT)"
+  echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS:$RESET $(wc -l < $WAYBACKURL_OUT)"
+  echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS Found:$RESET $(wc -l < $SUBD_WAYBACKURL_OUT)"
   echo
 }
 
@@ -234,34 +233,12 @@ function collect_subdomains {
 function run_sort {
   echo "$OKBOLD$OKBLUE#### Sorting Files ####$RESET"
   touch "$COLLECTED"
-  cat "$AMASS_ENUM_OUT" "$SUBFINDER_BIN" "$ASSETFINDER_OUT" "$FINDDOMAIN_OUT" "$SUBD_GAU_OUT" "$SUBD_WAYBACKURL_OUT" | $ANEW_BIN "$COLLECTED" &>/dev/null
+  cat "$RAW_DIR"/*.out | $ANEW_BIN "$COLLECTED" &>/dev/null 
   sort -u "$COLLECTED" > "$COLLECTED_SORTED"
+  echo -e "$OKGREEN""[+] All Collected:$RESET $(wc -l < $COLLECTED)"
   #grep -F -vf  "$OUT_SCOPE" "$COLLECTED_SORTED" > "$COLLECTED_FINAL"
   echo
 }
-
-# echo "#### Running ShuffleDNS ####"
-# if [ -f $COLLECTED_SORTED ]; then
-#   echo -e "$OKBOLD$OKGREEN Collected File Found $RESET"
-#   "$SHUFFLEDNS_BIN" -l "$COLLECTED_SORTED" -r $WORDLISTS_DIR/custom-dns-list.txt -o "$DNS_ACTIVE" -silent
-#   sort "$DNS_ACTIVE" > "$DNS_ACTIVE_SORTED"
-#   echo "Done"
-# else
-#   echo -e "{$OKBOLD$OKRED}[Collected File Not Found]$RESET"
-# fi
-# echo
-
-# echo "#### Running HTTProbe ####"
-# if [ -f "$DNS_ACTIVE_SORTED" ]; then
-#   echo -e "$OKGREEN DNS Active File Found $RESET"
-#   touch "$ACTIVE"
-#   cat "$DNS_ACTIVE_SORTED" | "$HTTPROBE_BIN" -prefer-https > "$ACTIVE"
-#   sort "$ACTIVE" > "$ACTIVE_SORTED"
-#   echo "Done"
-# else
-#   echo -e "$OKRED DNS Active File Not Found"
-# fi
-# echo
 
 while [ -n "$1" ]; do
 	case $1 in
@@ -285,49 +262,3 @@ while [ -n "$1" ]; do
 	esac
 	shift
 done
-
-HTTPROBE(){                     
-	cat "$RAW_DIR"/collected | $HTTPROBE_BIN -c 30 -prefer-https > "$ACTIVE_DIR/httprobe"
-}
-
-SHUFFLE_DNS() {
-	$SHUFFLEDNS_BIN  -l $ACTIVE_DIR/httprobe -r custom-dns-list -o $ACTIVE_DIR/dns_resolved
-}
-
-HTTPX() {
-	$HTTPX_BIN -l $ACTIVE_DIR/httprobe -mc 200,201,300,302,400,403 -o $ACTIVE_DIR/httpx_alive &>/dev/null
-	$HTTPX_BIN -l $ACTIVE_DIR/httprobe -o $ACTIVE_DIR/httpx_all &>/dev/null
-}
-
-FIND_JS() { 
-	cat $ACTIVE_DIR/httpx_all | hakrawler -d 5 -t 10  -scope subs -plain | $ANEW_BIN report/hakrawler.out &>/dev/null
-	cat $ACTIVE_DIR/httpx_all | $SUBJS_BIN | $ANEW_BIN report/subjs.out &>/dev/null
-	cat report/subjs.out | $ANEW_BIN report/links_all.out &>/dev/null
-	cat report/hakrawler.out | cut -d "]" -f 2 | cut -d " " -f 2 | $ANEW_BIN report/links_all.out &>/dev/null
-	sort -u report/links_all.out | $ANEW_BIN report/links_sorted.out &>/dev/null
-	echo -e $green"[+] Links:$end $(wc -l < report/links_sorted.out)"
-	while read domain; do
-    	cat report/links_sorted.out | grep -Ei $domain | $ANEW_BIN report/links_sorted_domain.out &>/dev/null
-	done < $file
-	cat report/links_sorted_domain.out | grep -Ei "*.js" > report/js.out
-	echo -e $green"[+] JS:$end $(wc -l < report/js.out)"
-}
-
-# function get_cidr {
-#   while read -r line; do
-#     res=$(host -t a "$line")
-#     if [ $(echo "$res" | cut -d ' ' -f 3) == 'no' ]; then
-#         echo "Not Found $WILDCARDS"
-#     else
-#         whois $(echo $res | cut -d ' ' -f 4) | grep "CIDR" | cut -d ':' -f 2 >> "$SUBDOMAINS_DIR"/ip_block
-#         sed "s/^[ \t]*//" -i "$SUBDOMAINS_DIR"/ip_block
-#         whois $("$SUBDOMAINS_DIR"/ip_block) | grep "CIDR" >> "$SUBDOMAINS_DIR"/cidr
-#     fi
-#     sleep 2
-#   done < "$WILDCARDS"
-# }
-
-# while read -r line; do
-#     cat cidr | $MAPCIDR_BIN -silent | $DNSX_BIN -ptr -resp-only -o test
-#     sed -i "/\googleuser\b/d" test
-# done < "$SUBDOMAINS"/cidr
