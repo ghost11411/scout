@@ -1,13 +1,11 @@
 #!/bin/bash
 
-VERSION=1.0
+#  VERSION=1.0
 
 #GET TARGET
-function get_company {
-  echo "Enter Company Name: " 
-  read -r "TARGET"
-  echo
-}
+echo "Enter Company Name: " 
+read -r "TARGET"
+echo
 
 #VARS
 RESET=$(tput sgr0)
@@ -41,6 +39,7 @@ GAU_OUT="$RAW_DIR"/gau
 SUBD_GAU_OUT="$RAW_DIR"/subd_gau.out
 WAYBACKURL_OUT="$RAW_DIR"/waybackurl
 SUBD_WAYBACKURL_OUT="$RAW_DIR"/subd_waybackurl.out
+CRT_OUT="$RAW_DIR"/crt.out
 
 #COLLECTED FILES
 COLLECTED="$RAW_DIR"/collected
@@ -204,7 +203,7 @@ function run_findomain {
 }
 
 function run_others {
-  echo "$OKBOLD$OKBLUE#### Running GAU & WayBackURL####$RESET"
+  echo "$OKBOLD$OKBLUE#### Running GAU, WayBackURL, Crt ####$RESET"
   while read -r line; do
     "$GAU_BIN" --threads 50 --subs "$line" | "$ANEW_BIN" "$GAU_OUT" &>/dev/null
     cat "$GAU_OUT" | "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_GAU_OUT" &>/dev/null
@@ -212,16 +211,22 @@ function run_others {
     cat "$WAYBACKURL_OUT" | "$UNFURL_BIN" -u domains | sort -u -o "$SUBD_WAYBACKURL_OUT" &>/dev/null
     curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$line&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u -o "$RAW_DIR"/wayback-"$line".out &>/dev/null
     curl -sk "https://crt.sh/?q=%.$line&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u -o "$RAW_DIR"/crt-"$line".out &>/dev/null
+    wget "https://crt.sh/?q=%.$line&output=json" -P "$RAW_DIR"/ &>/dev/null
+    mv "$RAW_DIR"/index* "$RAW_DIR"/crt_"$line".json
+    cat "$RAW_DIR"/crt_"$line".json | python3 -m json.tool | jq -r '.[].name_value' | sort -u -o "$RAW_DIR"/crt_"$line".out &>/dev/null
   done < "$WILDCARDS"
-  echo -e "$OKBOLD$OKGREEN""[+] Gau:$RESET $(wc -l < $GAU_OUT)"
-  echo -e "$OKBOLD$OKGREEN""[+] Gau Found:$RESET $(wc -l < $SUBD_GAU_OUT)"
-  echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS:$RESET $(wc -l < $WAYBACKURL_OUT)"
-  echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS Found:$RESET $(wc -l < $SUBD_WAYBACKURL_OUT)"
+  cat "$RAW_DIR"/crt*.out | "$ANEW_BIN" "$CRT_OUT" &>/dev/null
+  rm -r "$RAW_DIR"/*.json
+  # echo -e "$OKBOLD$OKGREEN""[+] Gau:$RESET $(wc -l < $GAU_OUT)"
+  # echo -e "$OKBOLD$OKGREEN""[+] Gau Found:$RESET $(wc -l < $SUBD_GAU_OUT)"
+  # echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS:$RESET $(wc -l < $WAYBACKURL_OUT)"
+  # echo -e "$OKBOLD$OKGREEN""[+] WayBackURLS Found:$RESET $(wc -l < $SUBD_WAYBACKURL_OUT)"
+  echo -e "$OKBOLD$OKGREEN""[+] Crt Found:$RESET $(wc -l < $CRT_OUT)"
   echo
 }
 
 function collect_subdomains {
-  get_asn_cidr
+  # # get_asn_cidr
   run_amass
   run_subfinder
   run_assetfinder
@@ -244,7 +249,6 @@ while [ -n "$1" ]; do
 	case $1 in
 		-df)
 			WILDCARDS=$2
-      get_company
       banner
       checks
       create_folders
@@ -253,9 +257,9 @@ while [ -n "$1" ]; do
 			shift ;;
 		-h|--help)
 			USAGE;;
-		-v|--version)
-			echo "v$VERSION"
-			exit 0 ;;
+		# -v|--version)
+		# 	echo "v$VERSION"
+		# 	exit 0 ;;
 		*)
 			echo "[-] Unknown Option: $1"
 			USAGE ;;
