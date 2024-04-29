@@ -157,49 +157,25 @@ function create_folders {
   echo
 }
 
-function get_asn_cidr {
-	while read -r line; do
-    touch "$ASN_OUT" "$IPBLOCK_OUT"
-    res=$(host -t a "$line")
-    ip=$(echo "$res" | cut -d " " -f 4)
-    whois -h riswhois.ripe.net "$ip" | grep "origin" | tail -n+2 | cut -d ":" -f 2 | sed "s/^[ \t]*//" | "$ANEW_BIN" "$ASN_OUT" &>/dev/null
-    whois -h riswhois.ripe.net "$ip" | grep "route" | cut -d ":" -f 2 | sed "s/^[ \t]*//" | "$ANEW_BIN" "$IPBLOCK_OUT" &>/dev/null
-	done < "$WILDCARDS"
-  echo -e "$OKBOLD$OKGREEN [*] Found ASN$RESET: $(wc -l < "$ASN_OUT")" 
-  cat "$ASN_OUT"
-  echo
-  echo -e "$OKBOLD$OKGREEN [*] Found IP_Block$RESET: $(wc -l < "$IPBLOCK_OUT")"
-  cat "$IPBLOCK_OUT"
-  echo
-}
-
-function run_amass {
-  echo "$OKBOLD$OKBLUE#### Running Amass ####$RESET"
-  # "$AMASS_BIN" intel -whois -df in-scope -o "$AMASS_INTEL_OUT"                   # Find Root Domains
-  "$AMASS_BIN" enum -passive -df "$WILDCARDS" -o "$AMASS_ENUM_OUT" &>/dev/null     # Find Subdomains
-  echo -e "$OKBOLD$OKGREEN""[+] Amass Found:$RESET $(wc -l < $AMASS_ENUM_OUT)"
-  echo
-}
-
-function run_subfinder {
-  echo "$OKBOLD$OKBLUE#### Running SubFinder ####$RESET"
-  "$SUBFINDER_BIN" -dL "$WILDCARDS" -all -t 100 -silent -o "$SUBFINDER_OUT" &>/dev/null
-  echo -e "$OKBOLD$OKGREEN""[+] SubFinder Found:$RESET $(wc -l < $SUBFINDER_BIN)"
-  echo
-}
-
-function run_assetfinder {
-  echo "$OKBOLD$OKBLUE#### Running AssetFinder ####$RESET"
-  cat "$WILDCARDS" | "$ASSETFINDER_BIN" -subs-only | $ANEW_BIN "$ASSETFINDER_OUT" &>/dev/null
-  echo -e "$OKBOLD$OKGREEN""[+] AssetFinder Found:$RESET $(wc -l < $ASSETFINDER_OUT)"
-  echo
-}
-
-function run_findomain {
-  echo "$OKBOLD$OKBLUE#### Running FindDomain ####$RESET"
-  "$FINDOMAIN_BIN" -f "$WILDCARDS" -q -u "$FINDDOMAIN_OUT" &>/dev/null
-  echo -e "$OKBOLD$OKGREEN""[+] FinDomain Found:$RESET $(wc -l < $FINDDOMAIN_OUT)"
-  echo
+function collect_subdomains {
+    while read -r domain; do
+        echo "$OKBOLD$OKBLUE#### Running Amass ####$RESET"
+        "$AMASS_BIN" enum -passive -timeout 5 -d "$domain" -o "$AMASS_ENUM_OUT" &>/dev/null     # Find Subdomains
+        echo -e "$OKBOLD$OKGREEN""[+] Amass Found:$RESET $(wc -l < $AMASS_ENUM_OUT)"
+        echo 
+        echo "$OKBOLD$OKBLUE#### Running SubFinder ####$RESET"
+        "$SUBFINDER_BIN" -d "$domain" -all -t 100 -silent -o "$SUBFINDER_OUT" &>/dev/null
+        echo -e "$OKBOLD$OKGREEN""[+] SubFinder Found:$RESET $(wc -l < $SUBFINDER_BIN)"
+        echo
+        echo "$OKBOLD$OKBLUE#### Running AssetFinder ####$RESET"
+        "$ASSETFINDER_BIN" -subs-only "$domain" | $ANEW_BIN "$ASSETFINDER_OUT" &>/dev/null
+        echo -e "$OKBOLD$OKGREEN""[+] AssetFinder Found:$RESET $(wc -l < $ASSETFINDER_OUT)"
+        echo
+        echo "$OKBOLD$OKBLUE#### Running FindDomain ####$RESET"
+        "$FINDOMAIN_BIN" --quiet -t "$domain" -q -u "$FINDDOMAIN_OUT" &>/dev/null
+        echo -e "$OKBOLD$OKGREEN""[+] FinDomain Found:$RESET $(wc -l < $FINDDOMAIN_OUT)"
+        echo
+    done < "$WILDCARDS"
 }
 
 function run_others {
@@ -225,14 +201,14 @@ function run_others {
   echo
 }
 
-function collect_subdomains {
-  # # get_asn_cidr
-  run_amass
-  run_subfinder
-  run_assetfinder
-  run_findomain
-  run_others
-}
+# function collect_subdomains {
+#   # # get_asn_cidr
+#   run_amass
+#   run_subfinder
+#   run_assetfinder
+#   run_findomain
+#   run_others
+# }
 
 # SORT ALL SUB-DOMAINS
 function run_sort {
@@ -245,6 +221,15 @@ function run_sort {
   echo
 }
 
+function passive_recursive {
+    for sub in $( ( cat "$COLLECTED" | rev | cut -d '.' -f 3,2,1 | rev | sort | uniq -c | sort -nr | grep -v '1 ' | head -n 10 && cat "$COLLECTED" | rev | cut -d '.' -f 4,3,2,1 | rev | sort | uniq -c | sort -nr | grep -v '1 ' | head -n 10 ) | sed -e 's/^[[:space:]]*//' | cut -d ' ' -f 2);do 
+        "$SUBFINDER_BIN" -d "$sub" -silent -max-time 2 | anew -q passive_recursive.txt
+        "$ASSETFINDER_BIN" --subs-only "$sub" | anew -q passive_recursive.txt
+        "$AMASS_BIN" enum -timeout 5 -passive -d "$sub" | anew -q passive_recursive.txt
+        "$FINDOMAIN_BIN" --quiet -t "$sub" | anew -q passive_recursive.txt
+    done
+}
+
 while [ -n "$1" ]; do
 	case $1 in
 		-df)
@@ -254,6 +239,7 @@ while [ -n "$1" ]; do
       create_folders
       collect_subdomains
       run_sort
+      passive_recursive
 			shift ;;
 		-h|--help)
 			USAGE;;
