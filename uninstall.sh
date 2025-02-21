@@ -1,31 +1,33 @@
 #!/bin/bash
 
 # VARS
-RESET=$(tput sgr0)
-OKBOLD=$(tput bold)
-OKRED=$(tput setaf 1)
-OKGREEN=$(tput setaf 2)
-OKBLUE=$(tput setaf 4)
+RESET="\e[0m"
+OKBOLD="\033[01;01m"
+OKRED="\033[0;31m"
+OKGREEN="\033[0;32m"
+OKBLUE="\033[1;34m"
 
-echo -e "$OKBOLD$OKRED" 
-    echo -e "                      _   "
-    echo -e "                     | |  "
-    echo -e "  ___  ___ ___  _   _| |_ "
-    echo -e " / __|/ __/ _ \| | | | __|"
-    echo -e " \__ \ (_| (_) | |_| | |_ "
-    echo -e " |___/\___\___/ \__,_|\__|"
-    echo -e "$RESET"
-    echo ""
+#CHECK ROOT
+echo 
+echo -e "${OKBLUE} Checking Root Permissions ${RESET}"
+sleep 2
+if [ "$EUID" -ne 0 ];then 
+    echo -e "${OKRED} !!Please run as root (use sudo ./install.sh)!! ${RESET}"
+exit
+else
+    echo -e "${OKGREEN} **Root Permission Granted** ${RESET}"
+fi
+echo
 
-INSTALL_DIR=/usr/share/scout
+INSTALL_DIR=~/scout
 
-echo -e "{$OKBLUE}[This script will uninstall scout and remove ALL files under $INSTALL_DIR. Are you sure you want to continue?$RESET"
-read -p "{$OKBLUE}(Y/N): " answer
+echo -e "${OKBOLD}${OKBLUE}[This script will uninstall scout and remove ALL files under $INSTALL_DIR. Are you sure you want to continue?"
+read -p "(Y/N): " answer
 
 if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
-    sudo rm -Rf /usr/share/scout/
-    #sudo rm -f /usr/bin/scout
-    echo -e "{$OKBOLD$OKGREEN}[ Removed ]$RESET"
+    sudo rm -Rf ~/scout/
+    clear
+    echo -e "${OKBOLD}${OKGREEN}[ Removed ]${RESET}"
 else 
-    echo -e "{$OKBOLD$OKRED}[ Not Removed ]$RESET"
+    echo -e "${OKBOLD}${OKRED}[ Not Removed ]${RESET}"
 fi
