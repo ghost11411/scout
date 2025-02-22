@@ -42,6 +42,27 @@ TOOLS_DIR="$INSTALL_DIR"/tools
 BIN_DIR="$TOOLS_DIR"/bin
 WORDLISTS_DIR="$TOOLS_DIR"/wordlists/
 
+# function install_2msubdomain {
+#     echo "#### Subdomain-Wordlist ####"
+#     wget "https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
+#     echo "2mSubdomain-Wordlist Installed"
+#     echo
+# }
+
+# function install_best_dns_wordlist {
+#     echo "#### Best-DNS-Wordlist ####"
+#     wget "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
+#     echo "2mSubdomain-Wordlist Installed"
+#     echo
+# }
+
+# function install_all_txt {
+#     echo "#### JH-All.txt-Wordlist ####"
+#     wget "https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
+#     echo "JH-All.txt Wordlist Installed"
+#     echo
+# }
+
 #DOWNLOAD AND INSTALL TOOLS
 function install_tools {
     echo -e "${OKBOLD}${OKBLUE} Making Folders ${RESET}"
@@ -78,7 +99,7 @@ function install_tools {
     wget "https://github.com/Findomain/Findomain/releases/download/$FINDD_VER/findomain-linux.zip" -O /tmp/findomain.zip &> /dev/null
     sudo unzip /tmp/findomain.zip -d $BIN_DIR &> /dev/null
     echo -e "${OKBLUE}  Installing sublister"
-    git clone https://github.com/aboul3la/Sublist3r.git $BIN_DIR/sublister &> /dev/null && pip3 install -r $BIN_DIR/sublister/requirements.txt &> /dev/null
+    git clone https://github.com/aboul3la/Sublist3r.git $BIN_DIR/sublister &> /dev/null && pip3 install -r $BIN_DIR/sublister/requirements.txt --break-system-packages &> /dev/null
     echo -e "${OKBLUE}  Installing sqlmap"
     git clone https://github.com/sqlmapproject/sqlmap.git $BIN_DIR/sqlmap &> /dev/null 
     mv ~/go/bin/* ${BIN_DIR}
@@ -103,6 +124,7 @@ echo -e "${OKBOLD}${OKGREEN} Scout will be Installed in "$HOME/scout/" ${RESET}"
 echo -e "${OKBLUE} [*] Select Input to Proceed"
 echo -e "${OKBLUE}  1. Install Scout"
 echo -e "${OKBLUE}  2. Complete Reinstall"
+# echo -e "${OKBLUE}  3. Complete Reinstall (Backup Workplace Folder)"
 echo -e ""
 read -p "Selection: "
 echo -e "${RESET}"
@@ -132,6 +154,17 @@ case "${REPLY}" in
         install_tools
         chmod 777 "$INSTALL_DIR"/* 
         echo -e "${OKBOLD}${OKBLUE}## Installation Completed ## ${RESET}" ;;
+    
+    # 3)  echo -e "${OKBOLD}${OKBLUE}##Complete Reinstalling Scout (Backup Workspace Folder)## ${RESET}"
+    #     echo -e "${OKBOLD}${OKBLUE}[Making Backup]"
+    #     cp $WORKSPACE_DIR ~/
+    #     echo -e "${OKBOLD}${OKBLUE}[Removing Scout Folder]"
+    #     rm -r "$INSTALL_DIR" && mkdir -p "$INSTALL_DIR" && chmod 777 -Rf "$INSTALL_DIR"
+    #     echo -e "[Downloading Latest Files]${RESET}"
+    #     git clone https://github.com/ghost11411/scout -q "$INSTALL_DIR"
+    #     install_tools
+    #     cp /tmp/ $WORKSPACE_DIR
+    #     chmod 777 "$INSTALL_DIR"/* ;;
     
     *)  echo "Invalid Input"
         ;;
