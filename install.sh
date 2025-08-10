@@ -10,11 +10,11 @@ OKBLUE="\033[1;34m"
 echo -e 
 echo -e "${OKBOLD}${OKBLUE} [*] Running Script ${RESET}"
 echo 
-sleep 2
+sleep 0.5
 
 #CHECK ROOT
 echo -e "${OKBLUE} Checking Root Permissions ${RESET}"
-sleep 2
+sleep 0.5
 if [ "$EUID" -ne 0 ];then 
     echo -e "${OKRED} !!Please run as root (use sudo ./install.sh)!! ${RESET}"
 exit
@@ -42,27 +42,6 @@ TOOLS_DIR="$INSTALL_DIR"/tools
 BIN_DIR="$TOOLS_DIR"/bin
 WORDLISTS_DIR="$TOOLS_DIR"/wordlists/
 
-# function install_2msubdomain {
-#     echo "#### Subdomain-Wordlist ####"
-#     wget "https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
-#     echo "2mSubdomain-Wordlist Installed"
-#     echo
-# }
-
-# function install_best_dns_wordlist {
-#     echo "#### Best-DNS-Wordlist ####"
-#     wget "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
-#     echo "2mSubdomain-Wordlist Installed"
-#     echo
-# }
-
-# function install_all_txt {
-#     echo "#### JH-All.txt-Wordlist ####"
-#     wget "https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt" -P "$WORDLISTS_DIR" 2>/dev/null && chmod 777 "$WORDLISTS_DIR"/rockyou.txt
-#     echo "JH-All.txt Wordlist Installed"
-#     echo
-# }
-
 #DOWNLOAD AND INSTALL TOOLS
 function install_tools {
     echo -e "${OKBOLD}${OKBLUE} Making Folders ${RESET}"
@@ -71,7 +50,8 @@ function install_tools {
     mkdir -p "$WORDLISTS_DIR"
     sleep 2
     echo -e "${OKBOLD}${OKBLUE} Installing Tools ${RESET}"
-    apt install -y whois jq unzip massdns sqlmap python3 python3-pip git golang-go gobuster parallel &> /dev/null
+    apt install -y whois jq unzip massdns sqlmap python3 python3-pip python3-argparse python3-requests python3-dnsython git golang-go gobuster parallel &> /dev/null
+    echo -e "${OKBLUE}  Installing GO" && wget -q -O - https://git.io/vQhTU | bash &>/dev/null
     sleep 2s
     echo -e "${OKBLUE}  Installing mapcidr" && go install github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest &> /dev/null
     echo -e "${OKBLUE}  Installing assetfinder" && go install github.com/tomnomnom/assetfinder@latest &> /dev/null
@@ -99,7 +79,7 @@ function install_tools {
     wget "https://github.com/Findomain/Findomain/releases/download/$FINDD_VER/findomain-linux.zip" -O /tmp/findomain.zip &> /dev/null
     sudo unzip /tmp/findomain.zip -d $BIN_DIR &> /dev/null
     echo -e "${OKBLUE}  Installing sublister"
-    git clone https://github.com/aboul3la/Sublist3r.git $BIN_DIR/sublister &> /dev/null && pip3 install -r $BIN_DIR/sublister/requirements.txt --break-system-packages &> /dev/null
+    git clone https://github.com/aboul3la/Sublist3r.git $BIN_DIR/sublister &> /dev/null &> /dev/null
     echo -e "${OKBLUE}  Installing sqlmap"
     git clone https://github.com/sqlmapproject/sqlmap.git $BIN_DIR/sqlmap &> /dev/null 
     mv ~/go/bin/* ${BIN_DIR}
@@ -116,6 +96,9 @@ function install_tools {
     wget -q https://raw.githubusercontent.com/Bo0oM/fuzz.txt/master/fuzz.txt -O $WORDLISTS_DIR/fuzz.txt &> /dev/null
     wget -q https://github.com/danielmiessler/SecLists/blob/master/Discovery/DNS/dns-Jhaddix.txt -O $WORDLISTS_DIR/dns.txt &> /dev/null
     wget -q https://github.com/danielmiessler/SecLists/blob/master/Discovery/Web-Content/big.txt -O $WORDLISTS_DIR/big.txt &> /dev/null
+    wget -q https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt -O "$WORDLISTS_DIR" &>/dev/null
+    wget -q https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt -O "$WORDLISTS_DIR" &>/dev/null
+    wget -q https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt -O "$WORDLISTS_DIR" &>/dev/null
     echo -e
     chmod 777 $BIN_DIR/*
 }
