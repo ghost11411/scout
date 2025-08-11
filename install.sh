@@ -54,7 +54,6 @@ echo -e "${OKBLUE}  Installing amass" && go install github.com/owasp-amass/amass
 echo -e "${OKBLUE}  Installing dnsx" && go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest &> /dev/null
 echo -e "${OKBLUE}  Installing gf" && go install github.com/tomnomnom/gf@latest &> /dev/null
 echo -e "${OKBLUE}  Installing gau" && go install github.com/lc/gau/v2/cmd/gau@latest &> /dev/null
-echo -e "${OKBLUE}  Installing gauplus" && go install github.com/bp0lr/gauplus@latest &> /dev/null
 echo -e "${OKBLUE}  Installing unfurl" && go install github.com/tomnomnom/unfurl@latest &> /dev/null
 echo -e "${OKBLUE}  Installing shuffledns" && go install github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest &> /dev/null
 echo -e "${OKBLUE}  Installing puredns" && go install github.com/d3mondev/puredns/v2@latest &> /dev/null
