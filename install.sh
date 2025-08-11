@@ -43,7 +43,7 @@ sleep 1
 
 #Installing Tools
 echo -e "${OKBOLD}${OKBLUE} 3. Installing Tools & Dependencies${RESET}"
-apt install -y whois jq unzip massdns sqlmap python3 python3-pip python3-argparse python3-requests python3-dnsython git golang-go gobuster parallel &> /dev/null
+apt install -y whois jq unzip massdns sqlmap python3 python3-pip python3-argparse python3-requests python3-dnsython pipx git golang-go gobuster parallel &> /dev/null
 wget -q -O - https://git.io/vQhTU | bash &>/dev/null
 sleep 1
 echo -e "${OKBLUE}  Installing mapcidr" && go install github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest &> /dev/null
