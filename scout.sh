@@ -1,62 +1,58 @@
 #!/bin/bash
-
-VERSION=1.0
+VERSION=1.1
 
 #VARS
 RESET="\e[0m"
-OKBOLD="\033[01;01m"
-OKRED="\033[0;31m"
-OKGREEN="\033[0;32m"
-OKBLUE="\033[1;34m"
+BOLD="\033[01;01m"
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+BLUE="\033[1;34m"
 
-CURRENTDATE=`date +"%Y-%m-%d %T"`
+CURRENTDATE=`date +"%Y-%m-%d_%T"`
 
 #DIRECTORIES
-INSTALL_DIR=/root/scout
+INSTALL_DIR=~/scout
 TOOLS_DIR="$INSTALL_DIR"/tools
 BIN_DIR="$TOOLS_DIR"/bin
 WORDLISTS_DIR="$TOOLS_DIR"/wordlists
 WORKSPACE_DIR="$INSTALL_DIR"/workspace
-OUTPUT_DIR="$WORKSPACE_DIR"/"scout_output_$CURRENTDATE"
+OUTPUT_DIR="$WORKSPACE_DIR"/"output_$CURRENTDATE"
 SUBDOMAINS_DIR="$OUTPUT_DIR"/subdomains
+RAW_DIR="$SUBDOMAINS_DIR"/raw
+COLLECTED_DIR="$SUBDOMAINS_DIR"/collected
+FINAL_DIR="$SUBDOMAINS_DIR"/final
 
-#FILES
-ASSETFINDER_OUT="$SUBDOMAINS_DIR"/assetfinder.out
-SUBFINDER_OUT="$SUBDOMAINS_DIR"/subfinder.out
-FINDDOMAIN_OUT="$SUBDOMAINS_DIR"/findomain.out
-GAUPLUS_OUT="$SUBDOMAINS_DIR"/gauplus.out
-WAYBACKURLS_OUT="$SUBDOMAINS_DIR"/waybackurls.out
-
-domain=
+domain=''
 
 BANNER(){
-  echo -e "${OKBOLD}${OKORANGE}" 
-  echo -e "${OKBOLD}                      _   "
-  echo -e "${OKBOLD}                     | |  "
-  echo -e "${OKBOLD}  ___  ___ ___  _   _| |_ "
-  echo -e "${OKBOLD} / __|/ __/ _ \| | | | __|"
-  echo -e "${OKBOLD} \__ \ (_| (_) | |_| | |_ "
-  echo -e "${OKBOLD} |___/\___\___/ \__,_|\__|${RESET}"
-  echo -e "${OKBOLD}               :-By Ghost"
+  echo -e "${BOLD}${OKORANGE}" 
+  echo -e "${BOLD}                      _   "
+  echo -e "${BOLD}                     | |  "
+  echo -e "${BOLD}  ___  ___ ___  _   _| |_ "
+  echo -e "${BOLD} / __|/ __/ _ \| | | | __|"
+  echo -e "${BOLD} \__ \ (_| (_) | |_| | |_ "
+  echo -e "${BOLD} |___/\___\___/ \__,_|\__|${RESET}"
+  echo -e "${BOLD}               :-By Ghost"
   echo -e "${RESET}"
   echo ""
-  echo -e "${OKBOLD} LEGENDS:"
-  echo -e "${OKBOLD}${OKBLUE} Blue = Script Running ${RESET}"
-  echo -e "${OKBOLD}${OKGREEN} Green = Everything Fine ${RESET}"
-  echo -e "${OKBOLD}${OKRED} Red = ERROR ${RESET}"
+  echo -e "${BOLD} LEGENDS:"
+  echo -e "${BOLD}${BLUE} Blue = Script Running ${RESET}"
+  echo -e "${BOLD}${GREEN} Green = Everything Fine ${RESET}"
+  echo -e "${BOLD}${RED} Red = ERROR ${RESET}"
+  echo -e
 }
 
 USAGE(){
 	while read -r line; do
 		printf "%b\n" "$line"
 	done <<-EOF
-	${OKRED}\r
-	\r${OKBOLD}${OKBLUE}Options${RESET}:
+	${RED}\r
+	\r${BOLD}${BLUE}Options${RESET}:
 	\r    -df         - File of Domains [Required]
 	\r    -h          - Displays this help message and exit.
 	\r    -v          - Displays the version and exit.
 
-	\r${OKBOLD}${OKBLUE}Examples${RESET}: 
+	\r${BOLD}${BLUE}Examples${RESET}: 
 	\r    - To run scout.sh against a list of domains:
 	\r    ./scout.sh -df domains.txt
 EOF
@@ -72,94 +68,82 @@ fi
 
 #Basic Checks
 CHECKS(){
-  echo -e 
-  echo -e "${OKBOLD}${OKBLUE} [*] Running Script ${RESET}"
-  echo 
-  sleep 2
-
-#CHECK ROOT
-  echo -e "${OKBLUE} Checking Root Permissions ${RESET}"
-  sleep 2
-  if [ "$EUID" -ne 0 ];then 
-      echo -e "${OKRED} !!Please run as root (use sudo ./install.sh)!! ${RESET}"
-  exit
-  else
-      echo -e "${OKGREEN} **Root Permission Granted** ${RESET}"
-  fi
-  echo
-
   #CHECK INTERNET
-  echo -e "${OKBLUE} Checking Internet Connection ${RESET}"
+  echo -e "${BLUE} Checking Internet Connection ${RESET}"
   wget -q --spider http://google.com
   if [ $? -eq 0 ]; then
-      echo -e "${OKGREEN} **Online** ${RESET}"
+      echo -e "${GREEN} **Online** ${RESET}"
   else
-      echo -e "${OKRED} !!Offline!! ${RESET}"
-      echo -e "${OKRED} !!Connect to Internet and rerun the script!! ${RESET}"
+      echo -e "${RED} !!Offline!! ${RESET}"
+      echo -e "${RED} !!Connect to Internet and rerun the script!! ${RESET}"
       exit
   fi
-  sleep 2
-  clear
+  echo
+  sleep 0.5
 }
 
 #CREATE FOLDERS 
 function create_folders {
-  mkdir -p "$OUTPUT_DIR"
-  if [ -d "$OUTPUT_DIR" ]; then
-    echo "$OUTPUT_DIR does exist."
-  fi
-  mkdir -p "$SUBDOMAINS_DIR"
-  if [ -d "$SUBDOMAINS_DIR" ]; then
-    echo "$SUBDOMAINS_DIR does exist."
-  fi
-
+  echo -e "${BLUE} Creating Folders ${RESET}"
+  mkdir -p "$OUTPUT_DIR" "$SUBDOMAINS_DIR" "$RAW_DIR" "$COLLECTED_DIR" "$FINAL_DIR"
   echo
 }
 
 function collect_subdomains {
     while read -r domain; do
-        echo -e "${OKBOLD}${OKBLUE} !!Checking $domain!! ${RESET}"
-        # echo "${OKBOLD}${OKBLUE}#### Running Amass ####${RESET}"
-        # "$AMASS_BIN" enum -passive -timeout 5 -d "$domain" -o "$AMASS_ENUM_OUT" &>/dev/null     # Find Subdomains
-        # echo -e "${OKBOLD}${OKGREEN}""[+] Amass Found:${RESET} $(wc -l < $AMASS_ENUM_OUT)"
-        # echo 
-        echo -e "${OKBOLD}${OKBLUE}#### Running SubFinder #### ${RESET}"
-        echo "$domain" | "$BIN_DIR"/subfinder -all -silent | sort -u > "$SUBFINDER_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] SubFinder Found:${RESET} $(wc -l "$SUBFINDER_OUT")"
+        mkdir -p $RAW_DIR/$domain
+        echo -e "${BLUE}!!Checking: $domain!! ${RESET}"
+        # AMASS
+        echo -e "${BLUE} #### Running Amass for $domain ####${RESET}"
+        $BIN_DIR/amass enum -d $domain -timeout 15 -o $RAW_DIR/$domain/amass.out &>/dev/null
+        echo -e "${GREEN}[+] Amass Found:${RESET}" $(wc -l < $RAW_DIR/$domain/amass.out | awk '{print $1}')
         echo
-        echo -e "${OKBOLD}${OKBLUE}#### Running AssetFinder ####${RESET}"
-        echo "$domain" | "$BIN_DIR"/assetfinder -subs-only | sort -u > "$ASSETFINDER_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] AssetFinder Found:${RESET} $(wc -l "$ASSETFINDER_OUT")"
+        # SubFinder 
+        echo -e "${BLUE} #### Running SubFinder for $domain #### ${RESET}"
+        $BIN_DIR/subfinder -d $domain -all -passive -recursive -o $RAW_DIR/$domain/subfinder.out &>/dev/null
+        echo -e "${GREEN}[+] SubFinder Found:${RESET}" $(wc -l $RAW_DIR/$domain/subfinder.out | awk '{print $1}')
         echo
-        echo -e "${OKBOLD}${OKBLUE}#### Running FindDomain ####${RESET}"
-        "$BIN_DIR"/findomain -q -t "$domain" -u > "$FINDDOMAIN_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] FinDomain Found:${RESET} $(wc -l "$FINDDOMAIN_OUT")"
+        # Assetfinder
+        echo -e "${BLUE} #### Running AssetFinder for $domain ####${RESET}"
+        touch $RAW_DIR/$domain/assetfinder.out
+        "$BIN_DIR"/assetfinder -subs-only $domain | sort -u > $RAW_DIR/$domain/assetfinder.out
+        echo -e "${GREEN}[+] AssetFinder Found:${RESET}" $(wc -l $RAW_DIR/$domain/assetfinder.out | awk '{print $1}')
         echo
-        echo -e "${OKBOLD}${OKBLUE}#### Running GAUPLUS ####${RESET}"
-        echo "$domain" | "$BIN_DIR"/gauplus | $BIN_DIR/unfurl domain | sort -u > "$GAUPLUS_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] GAUPLUS Found:${RESET} $(wc -l "$GAUPLUS_OUT")"
-        echo         
-        echo -e "${OKBOLD}${OKBLUE}#### Running WAYBACKURLS ####${RESET}"
-        echo "$domain" | "$BIN_DIR"/waybackurls | $BIN_DIR/unfurl domain | sort -u > "$WAYBACKURLS_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] WAYBACKURLS Found:${RESET} $(wc -l "$WAYBACKURLS_OUT")"
+        # Findomain
+        echo -e "${BLUE} #### Running FindDomain for $domain ####${RESET}"
+        "$BIN_DIR"/findomain -t $domain -u $RAW_DIR/$domain/findomain.out &>/dev/null
+        echo -e "${GREEN}[+] FinDomain Found:${RESET}" $(wc -l $RAW_DIR/$domain/findomain.out | awk '{print $1}')
         echo
-        curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$domain&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u >"$WEBARCHIVE_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] WEBARCHIVE Found:${RESET} $(wc -l "$WEBARCHIVE_OUT")"
-        curl -sk "https://crt.sh/?q=%.$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u > "$CRTSH_OUT"
-        echo -e "${OKBOLD}${OKGREEN}[+] Crt Found:${RESET} $(wc -l "$CRT_OUT")"
+        # GAU
+        echo -e "${BLUE} #### Running GAU for $domain ####${RESET}"
+        touch $RAW_DIR/$domain/gau.out
+        echo $domain | "$BIN_DIR"/gau | $BIN_DIR/unfurl domain | sort -u > $RAW_DIR/$domain/gau.out
+        echo -e "${GREEN}[+] GAU Found:${RESET}" $(wc -l $RAW_DIR/$domain/gau.out | awk '{print $1}')
+        echo  
+        # WayBackURLS       
+        echo -e "${BLUE} #### Running WAYBACKURLS for $domain ####${RESET}"
+        touch $RAW_DIR/$domain/waybackurls.out
+        echo $domain | "$BIN_DIR"/waybackurls | $BIN_DIR/unfurl domain | sort -u > $RAW_DIR/$domain/waybackurls.out
+        echo -e "${GREEN}[+] WAYBACKURLS Found:${RESET}" $(wc -l $RAW_DIR/$domain/waybackurls.out | awk '{print $1}')
+        echo
+        # WebArchive
+        echo -e "${BLUE} #### Running WebArchive for $domain ####${RESET}"
+        touch $RAW_DIR/$domain/webarchive.out
+        curl -sk "http://web.archive.org/cdx/search/cdx?url=*.$domain&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u > $RAW_DIR/$domain/webarchive.out
+        echo -e "${GREEN}[+] WebArchive Found:${RESET}" $(wc -l $RAW_DIR/$domain/webarchive.out | awk '{print $1}')
+        echo
+        # CRTSH
+        echo -e "${BLUE} #### Running CRTSH for $domain ####${RESET}"
+        touch $RAW_DIR/$domain/crtsh.out
+        curl -sk "https://crt.sh/?q=%.$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u > $RAW_DIR/$domain/crtsh.out
+        echo -e "${GREEN}[+] Crt Found:${RESET}" $(wc -l $RAW_DIR/$domain/crtsh.out | awk '{print $1}')
+        echo
+        touch "$COLLECTED_DIR"/"$domain"_all.out
+        cat "$RAW_DIR"/"$domain"/*.out | $BIN_DIR/unfurl domain | sort -u > "$COLLECTED_DIR"/"$domain"_all.out
+        echo -e "${GREEN}[+] All Subdomains Found for '$domain':${RESET}" $(wc -l "$COLLECTED_DIR"/"$domain"_all.out | awk '{print $1}')
+        echo
     done < "$WILDCARDS"
 }
-
-# # SORT ALL SUB-DOMAINS
-# function run_sort {
-#   echo "${OKBOLD}${OKBLUE}#### Sorting Files ####${RESET}"
-#   touch "$COLLECTED"
-#   cat "$RAW_DIR"/*.out | $ANEW_BIN "$COLLECTED" &>/dev/null 
-#   sort -u "$COLLECTED" > "$COLLECTED_SORTED"
-#   echo -e "${OKGREEN}""[+] All Collected:${RESET} $(wc -l < $COLLECTED)"
-#   #grep -F -vf  "$OUT_SCOPE" "$COLLECTED_SORTED" > "$COLLECTED_FINAL"
-#   echo
-# }
 
 # function passive_recursive {
 #     for sub in $( ( cat "$COLLECTED" | rev | cut -d '.' -f 3,2,1 | rev | sort | uniq -c | sort -nr | grep -v '1 ' | head -n 10 && cat "$COLLECTED" | rev | cut -d '.' -f 4,3,2,1 | rev | sort | uniq -c | sort -nr | grep -v '1 ' | head -n 10 ) | sed -e 's/^[[:space:]]*//' | cut -d ' ' -f 2);do 
@@ -178,11 +162,12 @@ while [ -n "$1" ]; do
       CHECKS
       create_folders
       collect_subdomains
+      # sorter
 			shift ;;
 		-h|--help)
       BANNER
 			USAGE;;
-		-v|--version)
+		-v|-V|--version)
       BANNER
       echo -e
 			echo "Current Version is v$VERSION"
