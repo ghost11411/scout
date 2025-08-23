@@ -1,8 +1,6 @@
 #!/bin/bash
 VERSION=1.1
 
-. ./functions.sh
-
 #VARS
 RESET="\e[0m"
 BOLD="\033[01;01m"
