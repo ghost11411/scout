@@ -84,15 +84,5 @@ git clone https://github.com/1ndianl33t/GF-Patterns ~/.gf &> /dev/null
 echo -e "${OKBLUE} Updating Nuclie Templates"
 nuclei -update-templates &> /dev/null
 echo -e
-echo -e "${OKBOLD}${OKBLUE} Getting Wordlists ${RESET}"
-wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/deepmagic.com-prefixes-top50000.txt -O $WORDLISTS_DIR/subdomains.txt &> /dev/null
-wget -q https://raw.githubusercontent.com/janmasarik/resolvers/master/resolvers.txt -O $WORDLISTS_DIR/resolvers.txt &> /dev/null
-wget -q https://raw.githubusercontent.com/Bo0oM/fuzz.txt/master/fuzz.txt -O $WORDLISTS_DIR/fuzz.txt &> /dev/null
-wget -q https://github.com/danielmiessler/SecLists/blob/master/Discovery/DNS/dns-Jhaddix.txt -O $WORDLISTS_DIR/dns.txt &> /dev/null
-wget -q https://github.com/danielmiessler/SecLists/blob/master/Discovery/Web-Content/big.txt -O $WORDLISTS_DIR/big.txt &> /dev/null
-wget -q https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt -O "$WORDLISTS_DIR" &>/dev/null
-wget -q https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt -O "$WORDLISTS_DIR" &>/dev/null
-wget -q https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt -O "$WORDLISTS_DIR" &>/dev/null
-echo -e
 chmod 777 $BIN_DIR/*
 echo -e "${OKBOLD}${OKGREEN} **Installation Completed** ${RESET}"
