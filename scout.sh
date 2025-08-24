@@ -84,6 +84,7 @@ function create_folders {
 
 function collect_subdomains {
   while read -r domain; do
+  STARTSCRIPT=$(date +%s)
     mkdir -p $RAW_DIR/"$domain"
     echo -e "${BLUE}!!Checking: "$domain"!! ${RESET}"
     echo -e
@@ -92,9 +93,9 @@ function collect_subdomains {
     start=$(date +%s)
     echo -e "${BLUE} #### Running SubFinder for "$domain" #### ${RESET}"
     touch $RAW_DIR/"$domain"/subfinder.out
-    "$BIN_DIR"/subfinder -d "$domain" -all -o $RAW_DIR/"$domain"/subfinder.out &>/dev/null # > /dev/null 2>&1 &
+    "$BIN_DIR"/subfinder -d "$domain" -all -o $RAW_DIR/"$domain"/subfinder.out &>/dev/null
     end=$(date +%s)
-    echo -e "${GREEN}[+] SubFinder Found :${RESET}" $(wc -l $RAW_DIR/"$domain"/subfinder.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] SubFinder Found " $(wc -l $RAW_DIR/"$domain"/subfinder.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # Assetfinder
@@ -103,7 +104,7 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/assetfinder.out
     "$BIN_DIR"/assetfinder -subs-only "$domain" | sort -u > $RAW_DIR/"$domain"/assetfinder.out
     end=$(date +%s)
-    echo -e "${GREEN}[+] AssetFinder Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/assetfinder.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] AssetFinder Found " $(wc -l $RAW_DIR/"$domain"/assetfinder.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # Findomain
@@ -112,7 +113,7 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/findomain.out
     "$BIN_DIR"/findomain -t "$domain" -u $RAW_DIR/"$domain"/findomain.out &>/dev/null
     end=$(date +%s)
-    echo -e "${GREEN}[+] FinDomain Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/findomain.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] FindDomain Found " $(wc -l $RAW_DIR/"$domain"/findomain.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # GAU
@@ -121,7 +122,7 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/gau.out
     echo "$domain" | "$BIN_DIR"/gau | $BIN_DIR/unfurl domain | sort -u > $RAW_DIR/"$domain"/gau.out
     end=$(date +%s)
-    echo -e "${GREEN}[+] GAU Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/gau.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] GAU Found " $(wc -l $RAW_DIR/"$domain"/gau.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo  
 
     # WayBackURLS      
@@ -130,16 +131,16 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/waybackurls.out
     echo "$domain" | "$BIN_DIR"/waybackurls | $BIN_DIR/unfurl domain | sort -u > $RAW_DIR/"$domain"/waybackurls.out
     end=$(date +%s)
-    echo -e "${GREEN}[+] WAYBACKURLS Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/waybackurls.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] WAYBACKURLS Found " $(wc -l $RAW_DIR/"$domain"/waybackurls.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # Sublist3r
     start=$(date +%s) 
     echo -e "${BLUE} #### Running Sublist3r for "$domain" ####${RESET}"
     touch $RAW_DIR/"$domain"/sublit3r.out
-    python3 $BIN_DIR/sublister/sublist3r.py -d "$domain" -o $RAW_DIR/"$domain"/sublit3r.out
+    python3 $BIN_DIR/sublister/sublist3r.py -d "$domain" -o $RAW_DIR/"$domain"/sublit3r.out >/dev/null 2>&1
     end=$(date +%s)
-    echo -e "${GREEN}[+] Sublist3r Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/sublit3r.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] Sublist3r Found " $(wc -l $RAW_DIR/"$domain"/sublit3r.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # WebArchive
@@ -148,7 +149,7 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/webarchive.out
     curl -sk "http://web.archive.org/cdx/search/cdx?url=*."$domain"&output=txt&fl=original&collapse=urlkey&page=" | awk -F/ '{gsub(/:.*/, "", $3); print $3}' | sort -u > $RAW_DIR/"$domain"/webarchive.out
     end=$(date +%s)
-    echo -e "${GREEN}[+] WebArchive Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/webarchive.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] WebArchive Found " $(wc -l $RAW_DIR/"$domain"/webarchive.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
     # CRTSH
@@ -157,24 +158,30 @@ function collect_subdomains {
     touch $RAW_DIR/"$domain"/crtsh.out
     curl -sk "https://crt.sh/?q=%."$domain"&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u > $RAW_DIR/"$domain"/crtsh.out
     end=$(date +%s)
-    echo -e "${GREEN}[+] Crt Found:${RESET}" $(wc -l $RAW_DIR/"$domain"/crtsh.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
+    echo -e "${GREEN}[+] Crt Found " $(wc -l $RAW_DIR/"$domain"/crtsh.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
-    # AMASS
-    start=$(date +%s) 
-    echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
-    touch $RAW_DIR/"$domain"/amass.out
-    $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
-    end=$(date +%s)
-    echo -e "${GREEN}[+] Amass Found:${RESET}" $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')"${GREEN} Subdomains in $((end - start)) seconds ${RESET}"
-    echo
+    # # AMASS
+    # start=$(date +%s) 
+    # echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
+    # touch $RAW_DIR/"$domain"/amass.out
+    # $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
+    # end=$(date +%s)
+    # echo -e "${GREEN}[+] Amass Found " $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
+    # echo
 
     touch "$COLLECTED_DIR"/"$domain"_all.out
     cat "$RAW_DIR"/"$domain"/*.out | $BIN_DIR/unfurl domain | sort -u > "$COLLECTED_DIR"/"$domain"_all.out
     echo -e "${GREEN}[+] All Subdomains Found for "$domain":${RESET}" $(wc -l "$COLLECTED_DIR"/"$domain"_all.out | awk '{print $1}')
     echo
     done < "$WILDCARDS"
-endscript=$(date +%s)
+  ENDSCRIPT=$(date +%s)
+  echo -e "${GREEN} Subdomain Scanning took "$((ENDSCRIPT - STARTSCRIPT))" seconds ${RESET}"
+}
+
+function collect_live {
+  touch "$COLLECTED_DIR"/httpx_all.out.json
+  $BIN_DIR/httpx -l "$COLLECTED_DIR"/"$domain"_all.out -sc -title -server -td -ip -cname -efqdn -asn -cdn -probe -favicon -pa -fr -j "$COLLECTED_DIR"/httpx_all.out.json
 }
 
 # function passive_recursive {
@@ -186,44 +193,52 @@ endscript=$(date +%s)
 #     done
 # }
 
-
-while getopts ':d:f:hv' OPTION; 
-do
+while getopts ":d:f:hv" OPTION; do
   case $OPTION in
-    
-    d) 
-      echo $OPTARG > "$INSTALL_DIR"/domain
-      WILDCARDS="$INSTALL_DIR"/domain
+    d)
+      echo "$OPTARG" > "$INSTALL_DIR/domain"
+      WILDCARDS="$INSTALL_DIR/domain"
       BANNER
       CHECKS
       create_folders
       collect_subdomains
-      # sorter
-      shift ;;
-
-    f)
-			WILDCARDS=$OPTARG
-      BANNER
-      CHECKS
-      create_folders
-      collect_subdomains
-      # sorter 
+      collect_live
       ;;
-
+      
+    f)
+      WILDCARDS="$OPTARG"
+      BANNER
+      CHECKS
+      create_folders
+      collect_subdomains
+      collect_live
+      ;;
+      
     h)
       BANNER
-			USAGE ;;
-
+      USAGE
+      exit 0
+      ;;
+      
     v)
       BANNER
-      echo -e
-			echo "Current Version is v$VERSION"
-			exit 0 ;;
-
-		*)
-			echo "[-] Unknown Option: $OPTARG"
+      echo
+      echo "Current Version is v$VERSION"
+      exit 0
+      ;;
+      
+    :)
+      echo "[-] Option -$OPTARG requires an argument." >&2
       BANNER
-			USAGE 
-      exit 1 ;;
+      USAGE
+      exit 1
+      ;;
+      
+    \?)
+      echo "[-] Unknown option: -$OPTARG" >&2
+      BANNER
+      USAGE
+      exit 1
+      ;;
   esac
 done
