@@ -111,7 +111,7 @@ function collect_subdomains {
     start=$(date +%s)
     echo -e "${BLUE} #### Running FindDomain for "$domain" ####${RESET}"
     touch $RAW_DIR/"$domain"/findomain.out
-    "$BIN_DIR"/findomain -t "$domain" -u $RAW_DIR/"$domain"/findomain.out &>/dev/null
+    "$BIN_DIR"/findomain -t "$domain" | $BIN_DIR/unfurl domain | sort -u > $RAW_DIR/"$domain"/findomain.out
     end=$(date +%s)
     echo -e "${GREEN}[+] FindDomain Found " $(wc -l $RAW_DIR/"$domain"/findomain.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
@@ -161,14 +161,14 @@ function collect_subdomains {
     echo -e "${GREEN}[+] Crt Found " $(wc -l $RAW_DIR/"$domain"/crtsh.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
-    # # AMASS
-    # start=$(date +%s) 
-    # echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
-    # touch $RAW_DIR/"$domain"/amass.out
-    # $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
-    # end=$(date +%s)
-    # echo -e "${GREEN}[+] Amass Found " $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
-    # echo
+    # AMASS
+    start=$(date +%s) 
+    echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
+    touch $RAW_DIR/"$domain"/amass.out
+    $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
+    end=$(date +%s)
+    echo -e "${GREEN}[+] Amass Found " $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
+    echo
 
     touch "$COLLECTED_DIR"/"$domain"_all.out
     cat "$RAW_DIR"/"$domain"/*.out | $BIN_DIR/unfurl domain | sort -u > "$COLLECTED_DIR"/"$domain"_all.out
