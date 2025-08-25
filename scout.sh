@@ -102,7 +102,7 @@ function collect_subdomains {
     start=$(date +%s)
     echo -e "${BLUE} #### Running AssetFinder for "$domain" ####${RESET}"
     touch $RAW_DIR/"$domain"/assetfinder.out
-    "$BIN_DIR"/assetfinder -subs-only "$domain" | sort -u > $RAW_DIR/"$domain"/assetfinder.out
+    "$BIN_DIR"/assetfinder "$domain" | grep $domain | sort -u > $RAW_DIR/"$domain"/assetfinder.out
     end=$(date +%s)
     echo -e "${GREEN}[+] AssetFinder Found " $(wc -l $RAW_DIR/"$domain"/assetfinder.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
@@ -161,27 +161,29 @@ function collect_subdomains {
     echo -e "${GREEN}[+] Crt Found " $(wc -l $RAW_DIR/"$domain"/crtsh.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
     echo
 
-    # AMASS
-    start=$(date +%s) 
-    echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
-    touch $RAW_DIR/"$domain"/amass.out
-    $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
-    end=$(date +%s)
-    echo -e "${GREEN}[+] Amass Found " $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
-    echo
+    # # AMASS
+    # start=$(date +%s) 
+    # echo -e "${BLUE} #### Running Amass for "$domain" in background ####${RESET}"
+    # touch $RAW_DIR/"$domain"/amass.out
+    # $BIN_DIR/amass enum -d "$domain" | awk '{for(i=1;i<=NF;i++) if($i ~ /'$domain'/) print $i}' | sort -u > $RAW_DIR/"$domain"/amass.out &>/dev/null
+    # end=$(date +%s)
+    # echo -e "${GREEN}[+] Amass Found " $(wc -l < $RAW_DIR/"$domain"/amass.out | awk '{print $1}')" Subdomains in $((end - start)) seconds ${RESET}"
+    # echo
 
     touch "$COLLECTED_DIR"/"$domain"_all.out
     cat "$RAW_DIR"/"$domain"/*.out | $BIN_DIR/unfurl domain | sort -u > "$COLLECTED_DIR"/"$domain"_all.out
     echo -e "${GREEN}[+] All Subdomains Found for "$domain":${RESET}" $(wc -l "$COLLECTED_DIR"/"$domain"_all.out | awk '{print $1}')
     echo
     done < "$WILDCARDS"
+  cat "$COLLECTED_DIR"/*_all.out | sort -u > "$COLLECTED_DIR"/all.out
   ENDSCRIPT=$(date +%s)
   echo -e "${GREEN} Subdomain Scanning took "$((ENDSCRIPT - STARTSCRIPT))" seconds ${RESET}"
 }
 
 function collect_live {
-  touch "$COLLECTED_DIR"/httpx_all.out.json
-  $BIN_DIR/httpx -l "$COLLECTED_DIR"/"$domain"_all.out -sc -title -server -td -ip -cname -efqdn -asn -cdn -probe -favicon -pa -fr -j "$COLLECTED_DIR"/httpx_all.out.json
+  mkdir "$COLLECTED_DIR"/httpx
+  touch "$COLLECTED_DIR"/httpx/httpx_all.out.json
+  $BIN_DIR/httpx -l "$COLLECTED_DIR"/all.out -sc -title -server -td -ip -cname -efqdn -asn -cdn -probe -favicon -pa -fr -silent -j "$COLLECTED_DIR"/httpx/httpx_all.out.json
 }
 
 # function passive_recursive {
