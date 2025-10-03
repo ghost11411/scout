@@ -1,0 +1,473 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+#CHECK ROOT
+if [ "$EUID" -ne 0 ]; then
+  ERR "Please run as root"
+  exit 1
+fi
+
+# ---------------- Colors ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+
+# ---------------- DEFAULT PATHS & TUNABLES ----------------
+INSTALL_DIR="${HOME}/scout"
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORKSPACE_DIR="${INSTALL_DIR}/workspace"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+LOG_FILE="/tmp/scout_install_failed.log"
+: > "$LOG_FILE"
+
+DEBUG=0           # set to 1 to show raw tool outputs
+MAX_RETRIES=2     # per-host retry attempts for port scanning
+
+# scanner rate/delay defaults (conservative)
+NAABU_RATE=150
+MASSCAN_RATE=300
+NMAP_TPS=50
+SCANNER_INTER_DELAY=30     # seconds between different scanners for same host
+THREADS_DEFAULT=5
+FFUF_CONCURRENCY=50        # ffuf threads per job
+FFUF_WORDLISTS=( \
+  "/usr/share/wordlists/dirb/common.txt" \
+  "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt" \
+  "/usr/share/wordlists/raft-large-directories.txt" \
+  "/usr/share/wordlists/ffuf/wordlist.txt" \
+)
+
+# ---------------- ARGS & FLAGS ----------------
+ALL_MODE=0
+INPUT_DOMAIN=""
+INPUT_FILE=""
+CUSTOM_OUTPUT=""
+SCANNERS_ONLY=0
+THREADS="$THREADS_DEFAULT"
+
+source "$INSTALL_DIR/modules/functions"
+
+BANNER
+
+USAGE(){
+  cat <<EOF
+SCOUT $VER
+Usage:
+  ./scout.sh --all -d target.com
+  ./scout.sh --all -f domains.txt
+  ./scout.sh --all --scanners-only -f hosts.txt -t 10
+Options:
+  -d <domain>           Scan single domain (used with --all)
+  -f <file>             File: domains (normal mode) or hosts (scanners-only)
+  -o <dir>              Custom output dir (under $WORKSPACE_DIR)
+  --scanners-only       Skip enumeration/httpx; use hosts file directly
+  -t, --threads <n>     Concurrent host scans (default: $THREADS_DEFAULT)
+  --debug               Enable debug output (show raw tool outputs)
+  -h, --help            Show this help
+EOF
+  exit 0
+}
+
+# parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all|-a) ALL_MODE=1; shift ;;
+    -d) INPUT_DOMAIN="$2"; shift 2 ;;
+    -f) INPUT_FILE="$2"; shift 2 ;;
+    -o) CUSTOM_OUTPUT="$2"; shift 2 ;;
+    --scanners-only) SCANNERS_ONLY=1; shift ;;
+    -t|--threads) THREADS="$2"; shift 2 ;;
+    --debug) DEBUG=1; shift ;;
+    -h|--help) USAGE ;;
+    *) echo -e "${RED}Unknown option: $1${RESET}"; USAGE ;;
+  esac
+done
+
+if [[ $ALL_MODE -ne 1 ]]; then
+  echo -e "${RED}Error: This script runs only in automated mode (--all/-a).${RESET}"
+  USAGE
+fi
+
+# ---------------- OUTPUT DIR ----------------
+CURRENTDATE=$(date +"%Y-%m-%d_%H-%M-%S")
+if [[ -n "$CUSTOM_OUTPUT" ]]; then
+  OUTPUT_DIR="$WORKSPACE_DIR/$CUSTOM_OUTPUT"
+else
+  OUTPUT_DIR="$WORKSPACE_DIR/output_$CURRENTDATE"
+fi
+mkdir -p "$OUTPUT_DIR"
+
+# ---------------- SPINNER ----------------
+START_SPINNER(){
+  local MSG="$1"
+  SPINNER_START=$(date +%s)
+  (
+    local i=0
+    local chars=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+    while true; do
+      printf "\r\033[K${YELLOW}[${chars[i]}] ${BOLD}${MSG}${RESET} ($(date -u -d @"$(( $(date +%s) - SPINNER_START ))" +%H:%M:%S))"
+      i=$(((i + 1) % ${#chars[@]}))
+      sleep 0.12
+    done
+  ) &
+  SPINNER_PID=$!
+}
+
+STOP_SPINNER(){
+  [[ -n "${SPINNER_PID:-}" ]] && kill "$SPINNER_PID" >/dev/null 2>&1 || true
+  wait "$SPINNER_PID" 2>/dev/null || true
+  printf "\r\033[K"
+}
+
+# ---------------- LOGGING ----------------
+OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[✔] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; }
+
+# ---------------- RUN TOOL WRAPPER ----------------
+RUN_TOOL(){
+  local NAME="$1"; shift
+  local CMD="$*"
+  START_SPINNER "Running ${NAME}"
+  if [[ $DEBUG -eq 1 ]]; then
+    eval "$CMD"
+  else
+    eval "$CMD" > /dev/null 2>&1 || true
+  fi
+  local STATUS=$?
+  STOP_SPINNER
+  if [[ $STATUS -eq 0 ]]; then
+    printf "${BOLD}${GREEN}[✔] %s completed${RESET}\n" "$NAME"
+  else
+    printf "${BOLD}${RED}[✗] %s failed or exited non-zero${RESET}\n" "$NAME"
+  fi
+}
+
+# ---------------- CHECKS ----------------
+CHECK_INTERNET(){
+  INFO "Checking internet connectivity..."
+  if ! command -v curl >/dev/null 2>&1; then
+    ERR "curl not found"
+    exit 1
+  fi
+  if ! curl -fsS --head https://www.google.com >/dev/null 2>&1; then
+    ERR "No internet connectivity"
+    exit 1
+  fi
+  OK " Online"
+}
+
+CHECK_BINS(){
+  REQUIRED=(subfinder assetfinder findomain gau waybackurls amass curl httpx unfurl dnsx ffuf nuclei naabu masscan nmap jq)
+  MISSING=()
+  for b in "${REQUIRED[@]}"; do
+    if ! command -v "$b" >/dev/null 2>&1 && ! command -v "$BIN_DIR/$b" >/dev/null 2>&1; then
+      MISSING+=("$b")
+    fi
+  done
+  if [ ${#MISSING[@]} -gt 0 ]; then
+    ERR "Missing binaries: ${MISSING[*]}"
+    echo "Please install them or put them in $BIN_DIR"
+    exit 1
+  fi
+  OK "All required tools found"
+}
+
+# ---------------- WORDLIST CHOICE ----------------
+PICK_WORDLIST(){
+  for w in "${FFUF_WORDLISTS[@]}"; do
+    if [[ -f "$w" ]]; then
+      echo "$w"
+      return 0
+    fi
+  done
+  echo ""
+}
+
+# ---------------- SUBDOMAIN & LIVE COLLECTION (skippable) ----------------
+COLLECT_SUBDOMAINS(){
+  mkdir -p "$RAW_DIR" "$COLLECTED_DIR"
+  touch "$CHECKPOINT_FILE"
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    if grep -Fxq "${domain}:SUBDOMAINS_DONE" "$CHECKPOINT_FILE" 2>/dev/null; then
+      INFO "Skipping subdomains for $domain (done)"
+      continue
+    fi
+    INFO "Collecting subdomains for $domain"
+    mkdir -p "$RAW_DIR/$domain"
+    RUN_TOOL "subfinder" "$(command -v subfinder || echo "$BIN_DIR/subfinder") -d \"$domain\" -all -o \"$RAW_DIR/$domain/subfinder.out\""
+    RUN_TOOL "assetfinder" "printf \"%s\n\" \"$domain\" | $(command -v assetfinder || echo "$BIN_DIR/assetfinder") | grep -F \"$domain\" | sort -u > \"$RAW_DIR/$domain/assetfinder.out\""
+    RUN_TOOL "findomain" "$(command -v findomain || echo "$BIN_DIR/findomain") -t \"$domain\" --quiet | sort -u > \"$RAW_DIR/$domain/findomain.out\""
+    RUN_TOOL "gau" "printf \"%s\n\" \"$domain\" | $(command -v gau || echo "$BIN_DIR/gau") | $(command -v unfurl || echo "$BIN_DIR/unfurl") domain | sort -u > \"$RAW_DIR/$domain/gau.out\""
+    RUN_TOOL "waybackurls" "printf \"%s\n\" \"$domain\" | $(command -v waybackurls || echo "$BIN_DIR/waybackurls") | $(command -v unfurl || echo "$BIN_DIR/unfurl") domain | sort -u > \"$RAW_DIR/$domain/waybackurls.out\""
+    RUN_TOOL "amass" "$(command -v amass || echo "$BIN_DIR/amass") enum -d \"$domain\" | sort -u > \"$RAW_DIR/$domain/amass.out\""
+    RUN_TOOL "crtsh" "curl -s \"https://crt.sh/?q=%25.$domain&output=json\" | tr ',' '\n' | awk -F'\"' '/name_value/ {gsub(/\\*\\./,\"\",\$4);gsub(/\\\\n/,\"\\n\",\$4);print \$4}' | sort -u > \"$RAW_DIR/$domain/crtsh.out\""
+    cat "$RAW_DIR/$domain"/*.out 2>/dev/null | $(command -v unfurl || echo "$BIN_DIR/unfurl") domain 2>/dev/null | sort -u > "$COLLECTED_DIR/${domain}_all.out" || true
+    echo "${domain}:SUBDOMAINS_DONE" >> "$CHECKPOINT_FILE"
+  done < "$WILDCARDS"
+  cat "$COLLECTED_DIR"/*_all.out 2>/dev/null | sort -u > "$COLLECTED_DIR/all.out" || true
+}
+
+COLLECT_LIVE(){
+  mkdir -p "$COLLECTED_DIR/resolved" "$COLLECTED_DIR/httpx"
+  if grep -Fxq "LIVE_DONE" "$CHECKPOINT_FILE" 2>/dev/null; then
+    INFO "Live discovery already done (resume)"
+    return
+  fi
+  if [[ ! -s "$COLLECTED_DIR/all.out" ]]; then
+    ERR "No subdomains to resolve; skipping live collection"
+    return
+  fi
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    if [[ -f "$COLLECTED_DIR/${domain}_all.out" ]]; then
+      RUN_TOOL "dnsx -> $domain" "$(command -v dnsx || echo "$BIN_DIR/dnsx") -silent -l \"$COLLECTED_DIR/${domain}_all.out\" -resp -a -o \"$COLLECTED_DIR/resolved/${domain}_resolved.out\""
+    fi
+  done < "$WILDCARDS"
+  cat "$COLLECTED_DIR/resolved/"*_resolved.out 2>/dev/null | sort -u > "$COLLECTED_DIR/resolved.out" || true
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    if [[ -s "$COLLECTED_DIR/resolved/${domain}_resolved.out" ]]; then
+      RUN_TOOL "httpx -> $domain" "$(command -v httpx || echo "$BIN_DIR/httpx") -l \"$COLLECTED_DIR/resolved/${domain}_resolved.out\" -sc -title -server -td -ip -cname -efqdn -asn -cdn -probe -favicon -pa -fr -silent -json -o \"$COLLECTED_DIR/httpx/${domain}_httpx.json\""
+    fi
+  done < "$WILDCARDS"
+  cat "$COLLECTED_DIR/httpx/"*_httpx.json 2>/dev/null > "$COLLECTED_DIR/httpx/httpx_all.out.json" || true
+  echo "LIVE_DONE" >> "$CHECKPOINT_FILE"
+}
+
+# ---------------- DELAY HELPER ----------------
+DELAY_WITH_SPINNER(){
+  local SECS="${1:-20}"
+  START_SPINNER "Waiting ${SECS}s"
+  sleep "$SECS"
+  STOP_SPINNER
+}
+
+# ---------------- PORT SCAN PER HOST (4 scanners) with retry ----------------
+PORT_SCAN_PER_HOST(){
+  local HOST="$1"
+  local HOST_SAFE
+  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
+  local PORTS_DIR="$COLLECTED_DIR/ports"
+  mkdir -p "$PORTS_DIR"
+
+  if grep -Fxq "${HOST}:PORTS_DONE" "$CHECKPOINT_FILE" 2>/dev/null; then
+    INFO "Skipping port scans for $HOST (done)"
+    return
+  fi
+
+  local RETRY=0
+  local SUCCESS=0
+  while [[ $RETRY -le $MAX_RETRIES ]]; do
+    INFO "Port scanning $HOST (attempt $((RETRY+1))/$((MAX_RETRIES+1)))"
+
+    NAABU_OUT="$PORTS_DIR/${HOST_SAFE}_naabu.out"
+    MASS_OUT="$PORTS_DIR/${HOST_SAFE}_masscan.out"
+    NMAP_OUT="$PORTS_DIR/${HOST_SAFE}_nmap.out"
+
+    RUN_TOOL "naabu -> $HOST" "$(command -v naabu || echo "$BIN_DIR/naabu") -host \"$HOST\" -ports 1-65535 -rate $NAABU_RATE -silent -o \"$NAABU_OUT\""
+    DELAY_WITH_SPINNER $SCANNER_INTER_DELAY
+
+    if command -v masscan >/dev/null 2>&1 || [[ -x "$BIN_DIR/masscan" ]]; then
+      RUN_TOOL "masscan -> $HOST" "$(command -v masscan || echo "$BIN_DIR/masscan") \"$HOST\" -p1-65535 --rate $MASSCAN_RATE -oG \"$MASS_OUT\""
+    fi
+    DELAY_WITH_SPINNER $SCANNER_INTER_DELAY
+
+    RUN_TOOL "nmap -> $HOST" "$(command -v nmap || echo "$BIN_DIR/nmap") -Pn -sT --top-ports 1000 --min-rate $NMAP_TPS -oG \"$NMAP_OUT\" \"$HOST\""
+
+    AGG="$PORTS_DIR/${HOST_SAFE}_agg_raw.txt"
+    > "$AGG"
+    for F in "$NAABU_OUT" "$RUST_OUT" "$MASS_OUT" "$NMAP_OUT"; do
+      [[ -f "$F" ]] || continue
+      grep -oE '([0-9]{1,5})' "$F" >> "$AGG" || true
+    done
+    sort -n "$AGG" | awk '$1>=1 && $1<=65535 {print $1}' | uniq > "$PORTS_DIR/${HOST_SAFE}_ports_dedup.out" || true
+
+    if [[ -s "$PORTS_DIR/${HOST_SAFE}_ports_dedup.out" ]]; then
+      SUCCESS=1
+      INFO "Found $(wc -l < "$PORTS_DIR/${HOST_SAFE}_ports_dedup.out") ports for $HOST"
+      break
+    else
+      INFO "No ports found on attempt $((RETRY+1)) for $HOST"
+      RETRY=$((RETRY+1))
+      sleep 3
+    fi
+  done
+
+  if [[ $SUCCESS -ne 1 ]]; then
+    ERR "Port scanning failed for $HOST after retries"
+  fi
+
+  echo "${HOST}:PORTS_DONE" >> "$CHECKPOINT_FILE"
+}
+
+# ---------------- FFUF (root + discovered ports) + nuclei per-host ----------------
+RUN_FFUF_AND_NUCLEI_PER_HOST(){
+  local HOST="$1"
+  local HOST_SAFE
+  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
+  local PORTS_DIR="$COLLECTED_DIR/ports"
+  local FFUF_DIR="$COLLECTED_DIR/ffuf"
+  local NUC_DIR="$COLLECTED_DIR/nuclei"
+  mkdir -p "$FFUF_DIR" "$NUC_DIR"
+
+  local WORDLIST
+  WORDLIST=$(PICK_WORDLIST)
+  if [[ -z "$WORDLIST" ]]; then
+    ERR "No ffuf wordlist found; skipping ffuf for $HOST"
+  fi
+
+  PORTS_FILE="$PORTS_DIR/${HOST_SAFE}_ports_dedup.out"
+  if [[ ! -s "$PORTS_FILE" ]]; then
+    INFO "No discovered open ports for $HOST; will still run root ffuf and nuclei on host"
+  fi
+
+  # root path scanning for both http and https
+  if [[ -n "$WORDLIST" ]]; then
+    for proto in http https; do
+      OUT="$FFUF_DIR/${HOST_SAFE}_${proto}_root_ffuf.json"
+      CMD="$(command -v ffuf || echo "$BIN_DIR/ffuf") -u ${proto}://$HOST/FUZZ -w \"$WORDLIST\" -t $FFUF_CONCURRENCY -mc 200,301,302,307,401,403 -of json -o \"$OUT\""
+      RUN_TOOL "ffuf ${proto} root -> $HOST" "$CMD"
+      DELAY_WITH_SPINNER 3
+    done
+  fi
+
+  # per-discovered-port ffuf (http & https)
+  if [[ -s "$PORTS_FILE" && -n "$WORDLIST" ]]; then
+    while read -r P; do
+      [ -z "$P" ] && continue
+      for proto in http https; do
+        OUT="$FFUF_DIR/${HOST_SAFE}_${proto}_port_${P}_ffuf.json"
+        CMD="$(command -v ffuf || echo "$BIN_DIR/ffuf") -u ${proto}://$HOST:${P}/FUZZ -w \"$WORDLIST\" -t $FFUF_CONCURRENCY -mc 200,301,302,307,401,403 -of json -o \"$OUT\""
+        RUN_TOOL "ffuf ${proto} port ${P} -> $HOST" "$CMD"
+        DELAY_WITH_SPINNER 2
+      done
+    done < "$PORTS_FILE"
+  fi
+
+  # prepare nuclei targets file using host:port combos (http & https)
+  NUC_TARGETS="$NUC_DIR/${HOST_SAFE}_targets.txt"
+  > "$NUC_TARGETS"
+  if [[ -s "$PORTS_FILE" ]]; then
+    while read -r P; do
+      [ -z "$P" ] && continue
+      echo "http://${HOST}:${P}" >> "$NUC_TARGETS"
+      echo "https://${HOST}:${P}" >> "$NUC_TARGETS"
+    done < "$PORTS_FILE"
+  else
+    echo "http://${HOST}" >> "$NUC_TARGETS"
+    echo "https://${HOST}" >> "$NUC_TARGETS"
+  fi
+  sort -u -o "$NUC_TARGETS" "$NUC_TARGETS"
+
+  if [[ -s "$NUC_TARGETS" ]]; then
+    NUC_OUT="$NUC_DIR/${HOST_SAFE}_nuclei.json"
+    CMD="$(command -v nuclei || echo "$BIN_DIR/nuclei") -l \"$NUC_TARGETS\" -o \"$NUC_OUT\" -json"
+    RUN_TOOL "nuclei -> $HOST" "$CMD"
+    DELAY_WITH_SPINNER 2
+  fi
+
+  echo "${HOST}:FFUF_NUC_DONE" >> "$CHECKPOINT_FILE"
+}
+
+# ---------------- PARALLEL HOSTS EXECUTION ----------------
+run_hosts_parallel(){
+  local HOSTFILE="$1"
+  local CONC="$2"
+  local -i active=0
+
+  while read -r H; do
+    H=$(echo "$H" | tr -d '[:space:]')
+    [ -z "$H" ] && continue
+
+    host_pipeline(){
+      PORT_SCAN_PER_HOST "$H"
+      RUN_FFUF_AND_NUCLEI_PER_HOST "$H"
+    }
+
+    host_pipeline &
+
+    active=$((active+1))
+    if [[ $active -ge $CONC ]]; then
+      wait -n || true
+      running=$(jobs -rp | wc -l)
+      active=$running
+    fi
+  done < "$HOSTFILE"
+
+  wait
+}
+
+# ---------------- MAIN SCRIPT ----------------
+BANNER
+INFO "Starting SCOUT $VER"
+INFO "Output directory: $OUTPUT_DIR"
+CHECK_INTERNET
+CHECK_BINS
+
+# determine WILDCARDS input
+if [[ -n "$INPUT_DOMAIN" ]]; then
+  WILDCARDS="$INSTALL_DIR/domain"
+  echo "$INPUT_DOMAIN" > "$WILDCARDS"
+elif [[ -n "$INPUT_FILE" ]]; then
+  WILDCARDS="$INPUT_FILE"
+else
+  ERR "Missing -d or -f input"
+  USAGE
+fi
+
+# process each domain in WILDCARDS
+while read -r DOMAIN; do
+  DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
+  [ -z "$DOMAIN" ] && continue
+
+  DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$DOMAIN_OUTPUT_DIR"
+  RAW_DIR="$DOMAIN_OUTPUT_DIR/raw"
+  COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
+  CHECKPOINT_FILE="$DOMAIN_OUTPUT_DIR/.checkpoint"
+  mkdir -p "$COLLECTED_DIR" "$COLLECTED_DIR/ports" "$COLLECTED_DIR/ffuf" "$COLLECTED_DIR/nuclei"
+
+  INFO "Starting domain pipeline for: $DOMAIN"
+  START_TIME=$(date +%s)
+
+  # 1) Either run enumeration+httpx, or use scanners-only host list
+  if [[ $SCANNERS_ONLY -eq 1 ]]; then
+    if [[ -z "$INPUT_FILE" ]]; then
+      ERR "--scanners-only requires -f <hosts_file>"
+      exit 1
+    fi
+    HOSTS_FILE="$COLLECTED_DIR/hosts_for_scan.txt"
+    cp "$INPUT_FILE" "$HOSTS_FILE"
+  else
+    COLLECT_SUBDOMAINS
+    COLLECT_LIVE
+    HOSTS_FILE="$COLLECTED_DIR/hosts_for_scan.txt"
+    > "$HOSTS_FILE"
+    if [[ -s "$COLLECTED_DIR/httpx/httpx_all.out.json" ]]; then
+      grep -oP '"url":"\K[^"]+' "$COLLECTED_DIR/httpx/httpx_all.out.json" 2>/dev/null | sed -E 's#https?://##' | sed -E 's#/.*$##' | sort -u > "$HOSTS_FILE" || true
+    fi
+    if [[ ! -s "$HOSTS_FILE" && -s "$COLLECTED_DIR/resolved.out" ]]; then
+      cp "$COLLECTED_DIR/resolved.out" "$HOSTS_FILE"
+    fi
+  fi
+
+  if [[ ! -s "$HOSTS_FILE" ]]; then
+    ERR "No hosts found for scanning under $DOMAIN"
+    continue
+  fi
+
+  INFO "Launching host scans (threads=$THREADS) for domain $DOMAIN"
+  run_hosts_parallel "$HOSTS_FILE" "$THREADS"
+
+  END_TIME=$(date +%s)
+  INFO "Domain $DOMAIN finished in $((END_TIME-START_TIME))s. Per-host outputs under $DOMAIN_OUTPUT_DIR"
+
+done < "$WILDCARDS"
+
+INFO "All done. Outputs are in: $OUTPUT_DIR"
+# EOF

@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# ---------------- CONFIG ----------------
+INSTALL_DIR="${HOME}/scout"
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+LOG_FILE="$INSTALL_DIR/install.log"
+mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR"
+: > "$LOG_FILE"
+
+# ---------------- COLORS ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+VER=v0.1
+
+OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; echo "$(date --iso-8601=seconds) - $1" >> "$LOG_FILE"; }
+
+# ---------------- BRAILLE SPINNER ----------------
+BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+
+# ---------------- ASCII BANNER ----------------
+BANNER(){
+  ASCII_SCOUT=$(cat <<'EOF'
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
+   \______/  \______/  \______/  \______/    |__/   
+EOF
+  )
+  local tag="${VER:-v?}"
+  TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
+
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      sleep 0.0008
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    sleep 0.002
+  done
+  printf "\n\n"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+}
+
+# ---------------- HELPERS ----------------
+RUN_CMD() {
+    local DESC="$1"
+    shift
+    if "$@" 2>>"$LOG_FILE"; then
+        OK "$DESC"
+        return 0
+    else
+        ERR "$DESC failed. Check $LOG_FILE"
+        return 1
+    fi
+}
+
+CHECK_COMMAND() { command -v "$1" >/dev/null 2>&1; }
+
+SPINNER_WAIT_PIDS() {
+    local -a PIDS=()
+    local MSG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            ''|*[!0-9]*) MSG="$*"; break ;;
+            *) PIDS+=("$1"); shift ;;
+        esac
+    done
+
+    if [ ! -t 1 ]; then
+        for P in "${PIDS[@]}"; do wait "$P" 2>/dev/null || true; done
+        return
+    fi
+
+    local I=0
+    while :; do
+        local RUNNING=0
+        for P in "${PIDS[@]}"; do
+            if kill -0 "$P" 2>/dev/null; then RUNNING=1; break; fi
+        done
+        [ "$RUNNING" -eq 0 ] && break
+        local CHAR="${BRAILLE_STYLE_SPINNER_CHARS[I % ${#BRAILLE_STYLE_SPINNER_CHARS[@]}]}"
+        if [ -n "$MSG" ]; then
+            printf "\r[%s] %s " "$CHAR" "$MSG"
+        else
+            printf "\r[%s] Working... " "$CHAR"
+        fi
+        I=$((I+1))
+        sleep 0.12
+    done
+    printf "\r\033[K"
+}
+
+RUN_WITH_SPINNER() {
+    local MSG="$1"
+    shift
+    "$@" 2>>"$LOG_FILE" & local PID=$!
+    SPINNER_WAIT_PIDS "$PID" "$MSG"
+    wait "$PID" || return 1
+    OK "$MSG"
+    return 0
+}
+
+RUN_SYNC_WITH_SPINNER() { RUN_WITH_SPINNER "$1" "${@:2}"; }
+
+# ---------------- TOOLSETS ----------------
+GO_TOOLS=(
+    "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+    "amass|github.com/owasp-amass/amass/v4/...@master"
+    "assetfinder|github.com/tomnomnom/assetfinder@latest"
+    "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+    "waybackurls|github.com/tomnomnom/waybackurls@latest"
+    "gau|github.com/lc/gau/v2/cmd/gau@latest"
+    "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+    "gf|github.com/tomnomnom/gf@latest"
+    "unfurl|github.com/tomnomnom/unfurl@latest"
+    "httprobe|github.com/tomnomnom/httprobe@latest"
+    "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+    "ffuf|github.com/ffuf/ffuf/v2@latest"
+    "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+    "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+    "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
+)
+
+APT_PACKAGES=(
+    whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
+)
+
+PIPX_TOOLS=("arjun")
+
+REPOS=(
+    "1ndianl33t/GF-Patterns|$GF_DIR|https://github.com/1ndianl33t/GF-Patterns.git"
+    "aboul3la/Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
+)
+
+# ---------------- CLEANUP ----------------
+CLEANUP_ITEMS=()
+CLEANUP() {
+    jobs -p 2>/dev/null | xargs -r -n1 kill 2>/dev/null || true
+    for ITEM in "${CLEANUP_ITEMS[@]:-}"; do
+        [ -e "$ITEM" ] && rm -rf "$ITEM" || true
+    done
+}
+trap CLEANUP EXIT
+
+# ---------------- ACTIONS ----------------
+ENSURE_BASIC_COMMANDS() {
+    local OKAY=0
+    for CMD in git curl jq tar unzip go bash; do
+        if ! CHECK_COMMAND "$CMD"; then
+            ERR "Required command '$CMD' not found"
+            OKAY=1
+        fi
+    done
+    [ "$OKAY" -eq 0 ]
+}
+
+INSTALL_APT_PACKAGES() {
+    INFO "Updating apt cache..."
+    sudo apt update -y >/dev/null 2>>"$LOG_FILE" & PID=$!
+    SPINNER_WAIT_PIDS "$PID" "apt update"
+    wait "$PID" || true
+
+    INFO "Installing apt packages..."
+    sudo apt install -y "${APT_PACKAGES[@]}" >/dev/null 2>>"$LOG_FILE" & PID=$!
+    SPINNER_WAIT_PIDS "$PID" "apt install"
+    wait "$PID" || true
+
+    OK "apt packages installed"
+}
+
+INSTALL_PIPX_TOOLS() {
+    if ! CHECK_COMMAND pipx; then
+        INFO "Installing pipx"
+        RUN_WITH_SPINNER "Install pipx" python3 -m pip install --user pipx >/dev/null 2>&1 || true
+        RUN_CMD "Ensure pipx path" python3 -m pipx ensurepath || true
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
+    for T in "${PIPX_TOOLS[@]}"; do
+        if ! pipx list | grep -qE "^\s*$T" 2>/dev/null; then
+            RUN_WITH_SPINNER "pipx install: $T" python3 -m pipx install "$T" >/dev/null 2>&1 || true
+        else
+            INFO "$T already installed via pipx"
+        fi
+    done
+}
+
+INSTALL_GO_TOOLS_ONE_BY_ONE() {
+    if ! CHECK_COMMAND go; then
+        WARN "Go not found; skipping Go tools"
+        return
+    fi
+    export GOBIN="$BIN_DIR"
+    export PATH="$GOBIN:$PATH"
+
+    INFO "Installing Go tools..."
+    for PAIR in "${GO_TOOLS[@]}"; do
+        NAME="${PAIR%%|*}"
+        PKG="${PAIR#*|}"
+        MSG="go install: $NAME"
+        ( env GOBIN="$GOBIN" go install "$PKG" 2>>"$LOG_FILE" ) & PID=$!
+        SPINNER_WAIT_PIDS "$PID" "$MSG"
+        if wait "$PID"; then
+            OK "$NAME"
+        else
+            ERR "$NAME failed"
+        fi
+    done
+}
+
+INSTALL_MASSCAN() {
+    if [ -x "$BIN_DIR/masscan" ]; then
+        INFO "masscan already present"
+        return
+    fi
+    local DIR
+    DIR=$(mktemp -d)
+    CLEANUP_ITEMS+=("$DIR")
+    RUN_WITH_SPINNER "Clone masscan" git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >/dev/null 2>&1 || return 1
+    RUN_WITH_SPINNER "Build masscan" bash -lc "cd '$DIR' && make -j$(nproc)" >/dev/null 2>&1 || return 1
+    if [ -f "$DIR/bin/masscan" ]; then
+        mv "$DIR/bin/masscan" "$BIN_DIR/"
+        chmod +x "$BIN_DIR/masscan"
+        OK "masscan"
+    else
+        ERR "masscan build failed"
+    fi
+}
+
+INSTALL_NMAP_STATIC() {
+    local ARCH
+    ARCH=$(uname -m || true)
+    if [ "$ARCH" = "x86_64" ]; then
+        local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
+        INFO "Fetching static nmap"
+        curl -fsSL "$URL" -o "$BIN_DIR/nmap" 2>>"$LOG_FILE" && chmod +x "$BIN_DIR/nmap" && OK "nmap (static)" || WARN "Failed to fetch static nmap"
+    else
+        INFO "Skipping static nmap for arch $ARCH"
+    fi
+}
+
+INSTALL_FINDOMAIN() {
+    if [ -x "$BIN_DIR/findomain" ]; then
+        INFO "findomain already installed"
+        return
+    fi
+    INFO "Installing findomain"
+    local VER TMP
+    VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>"$LOG_FILE" | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
+    [ -z "$VER" ] && { WARN "Could not determine findomain latest version"; return; }
+    TMP=$(mktemp -d)
+    CLEANUP_ITEMS+=("$TMP")
+    RUN_WITH_SPINNER "Download findomain $VER" curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" || return 1
+    RUN_WITH_SPINNER "Unzip findomain" unzip -o "$TMP/findomain.zip" -d "$TMP" >/dev/null 2>>"$LOG_FILE"
+    if [ -f "$TMP/findomain" ]; then
+        mv "$TMP/findomain" "$BIN_DIR/findomain"
+        chmod +x "$BIN_DIR/findomain"
+        OK "findomain"
+    else
+        WARN "findomain binary not found"
+    fi
+}
+
+CLONE_OR_UPDATE_REPOS() {
+    for ENTRY in "${REPOS[@]}"; do
+        IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
+        if [ -d "$PATH/.git" ]; then
+            INFO "Updating $NAME"
+            RUN_WITH_SPINNER "git pull $NAME" git -C "$PATH" pull --ff-only || true
+        else
+            INFO "Cloning $NAME"
+            RUN_WITH_SPINNER "git clone $NAME" git clone --depth 1 "$GITURL" "$PATH" || true
+        fi
+    done
+}
+
+UPDATE_NUCLEI_TEMPLATES() {
+    CHECK_COMMAND nuclei && RUN_WITH_SPINNER "Nuclei templates update" nuclei -ut || WARN "nuclei not found; skip templates update"
+}
+
+# ---------------- MAIN INSTALL ----------------
+BANNER
+INFO "Starting full install"
+INSTALL_APT_PACKAGES || true
+ENSURE_BASIC_COMMANDS || true
+INSTALL_PIPX_TOOLS || true
+INSTALL_GO_TOOLS_ONE_BY_ONE || true
+INSTALL_MASSCAN || true
+INSTALL_NMAP_STATIC || true
+INSTALL_FINDOMAIN || true
+CLONE_OR_UPDATE_REPOS || true
+UPDATE_NUCLEI_TEMPLATES || true
+
+chmod 755 "$BIN_DIR"/* 2>/dev/null || true
+[ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
+if [ -w /usr/local/bin ]; then
+    ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created"
+elif sudo -n true 2>/dev/null; then
+    sudo ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created (sudo)"
+else
+    WARN "Could not symlink; run manually: sudo ln -sf $INSTALL_DIR/scout /usr/local/bin/scout"
+fi
+
+OK "Install finished"
+exit 0
+# ---------------- END ----------------

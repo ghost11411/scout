@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# ---------------- Colors ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+VER=v0.1
+
+# ---------------- DEFAULT PATHS & TUNABLES ----------------
+INSTALL_DIR="${HOME}/scout"
+
+# ---------------- ASCII BANNER ----------------
+BANNER(){
+  # ASCII art; single-quoted heredoc to avoid variable expansion
+  ASCII_SCOUT=$(cat <<'EOF'
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
+   \______/  \______/  \______/  \______/    |__/   
+EOF
+  )
+    # Tagline with version
+  local tag="${VER:-v?}"
+  TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
+
+  # print banner line by line quickly
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      sleep 0.0008
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    sleep 0.002
+  done
+  printf "\n\n"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+}
+
+OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[✔] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; }
+
+BANNER
+
+#CHECK ROOT
+if [ "$EUID" -ne 0 ]; then
+  ERR "Please run as root"
+  exit 1
+fi
+
+if [ ! -d "$INSTALL_DIR" ]; then
+  ERR "Scout is not installed in $INSTALL_DIR"
+  exit 1
+fi
+
+# Remove folder
+INFO "Removing $INSTALL_DIR..."
+if rm -rf "$INSTALL_DIR"; then
+    OK "Removed $INSTALL_DIR"
+else
+    ERR "Failed to remove $INSTALL_DIR"
+    exit 1
+fi
+
+# Remove symlink
+if [ -L /usr/local/bin/scout ]; then
+    if rm -f /usr/local/bin/scout 2>/dev/null; then
+        OK "Removed /usr/local/bin/scout"
+    elif sudo rm -f /usr/local/bin/scout 2>/dev/null; then
+        OK "Removed /usr/local/bin/scout (via sudo)"
+    else
+        ERR "Could not remove /usr/local/bin/scout (permission required). Run: sudo rm -f /usr/local/bin/scout"
+    fi
+else
+    OK "No symlink /usr/local/bin/scout found"
+fi
+
+OK "Scout uninstalled. Folder removed: '$INSTALL_DIR'"
+exit 0

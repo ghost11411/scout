@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# ---------------- Colors ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+VER=v0.1
+
+# ---------------- ASCII BANNER ----------------
+BANNER(){
+  # ASCII art; single-quoted heredoc to avoid variable expansion
+  ASCII_SCOUT=$(cat <<'EOF'
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
+   \______/  \______/  \______/  \______/    |__/   
+EOF
+  )
+    # Tagline with version
+  local tag="${VER:-v?}"
+  TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
+
+  # print banner line by line quickly
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      sleep 0.0008
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    sleep 0.002
+  done
+  printf "\n\n"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+}
+
+RUN_WITH_SPINNER() {
+    local msg=$1
+    shift
+    "$@" &
+    local pid=$!
+    local delay=0.1
+    local spinstr='|/-\'
+    while kill -0 $pid 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  %s\r" "$spinstr" "$msg"
+        spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+    done
+    wait $pid
+    printf "\r%-*s\r" $(( ${#msg} + 10 )) ""  # clears the line
+}
+export -f RUN_WITH_SPINNER
