@@ -119,6 +119,8 @@ spinner_task() {
     local PID="$2"
     local START=$(date +%s)
     local I=0
+    # If PID is empty or 0 just return
+    [ -z "$PID" ] && return
     while kill -0 "$PID" 2>/dev/null; do
         local NOW=$(date +%s)
         local ELAPSED=$((NOW - START))
@@ -131,11 +133,19 @@ spinner_task() {
 
 run_task() {
     local NAME="$1"; shift
+    # Start command in background; stdout -> /dev/null, stderr -> log
     "$@" >/dev/null 2>>"$LOG_FILE" &
     local PID=$!
     spinner_task "$NAME" "$PID"
-    wait $PID
+    # wait inside an if to avoid set -e killing the script on non-zero exit
+    if ! wait "$PID"; then
+        local EXIT_CODE=$?
+        ERR "$NAME failed (exit code $EXIT_CODE). See $LOG_FILE for details."
+        # Do not exit whole script — return non-zero so callers can choose if they want to fail
+        return 1
+    fi
     OK "$NAME completed"
+    return 0
 }
 
 # ---------------- INSTALL FUNCTIONS (serial) ----------------
@@ -150,7 +160,7 @@ INSTALL_GO_TOOLS_SERIAL() {
     export PATH="$GOBIN:$PATH"
     TOOLS=(
         "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
-        "amass|github.com/owasp-amass/amass/v4/...@master"
+        "amass|github.com/owasp-amass/amass/cmd/amass@latest"
         "assetfinder|github.com/tomnomnom/assetfinder@latest"
         "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
         "waybackurls|github.com/tomnomnom/waybackurls@latest"
