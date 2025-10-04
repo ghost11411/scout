@@ -2,6 +2,11 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+if ! command -v sleep >/dev/null; then
+    echo "[*] Installing base system utilities..."
+    sudo apt update -y && sudo apt install -y coreutils util-linux
+fi
+
 # Ensure standard system paths are included
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
