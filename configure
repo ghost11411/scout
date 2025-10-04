@@ -67,7 +67,7 @@ for arg in "$@"; do
     esac
 done
 
-STARTED_AT=$(date +"%d-%m-%Y_%H:%M:%S")
+# STARTED_AT=$(date +"%d-%m-%Y_%H:%M:%S")
 START_EPOCH=$(date +%s)
 
 # ---------------- Start Installation ----------------
@@ -164,16 +164,16 @@ else
     exit 1
 fi
 
-ENDED_AT=$(date +"%d-%m-%Y_%H:%M:%S")
+# ENDED_AT=$(date +"%d-%m-%Y_%H:%M:%S")
 END_EPOCH=$(date +%s)
 
 DURATION=$(( END_EPOCH - START_EPOCH ))
 TIMETOOK=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $(( (DURATION%3600)/60 )) $((DURATION%60)) )
 
-echo -e "${GREEN}[+] STARTED${RESET}: ${STARTED_AT}, ${GREEN}FINISHED${RESET}: ${ENDED_AT}, ${GREEN}TIMETOOK${RESET}: ${TIMETOOK}"
+echo -e "${GREEN}[+]$TIMETOOK${RESET}: ${TIMETOOK}"
 
-echo -e "${BOLD}${GREEN}Scout installation completed successfully!${RESET}"
+OK "Scout installation completed successfully!"
 # ---------------- End ----------------
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
-echo -e "${BOLD}${GREEN}Happy Recon! 🔎${RESET}"
+OK "Happy Recon! 🔎"
