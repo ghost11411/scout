@@ -12,7 +12,7 @@ INSTALL_DIR="/root/scout"
 FORCE=false
 UPDATE=false
 LOG_FILE="$INSTALL_DIR/install.log"
-mkdir -p "$INSTALL_DIR" && touch "$LOG_FILE"
+touch "$LOG_FILE"
 : > "$LOG_FILE"
 
 # ---------------- ASCII BANNER ----------------
