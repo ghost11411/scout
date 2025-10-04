@@ -15,7 +15,7 @@ mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR"
 : > "$LOG_FILE"
 
 # ---------------- COLORS ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m";
 VER=v0.1
 
 OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
