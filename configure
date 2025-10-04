@@ -57,6 +57,25 @@ INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; echo "$1" >> "$LOG_FILE"; }
 
+# ---------------- Bootstrap Core Utilities ----------------
+INFO "Checking base utilities..."
+if ! command -v sleep >/dev/null || ! command -v chmod >/dev/null || ! command -v ln >/dev/null; then
+    INFO "Installing base system utilities..."
+    if command -v apt >/dev/null; then
+        apt update -y && apt install -y coreutils util-linux findutils
+    elif command -v apk >/dev/null; then
+        apk add --no-cache coreutils util-linux findutils bash
+    elif command -v yum >/dev/null; then
+        yum install -y coreutils util-linux findutils
+    else
+        ERR "Unsupported package manager. Please install coreutils/util-linux manually."
+        exit 1
+    fi
+    OK "Base utilities installed"
+else
+    OK "Base utilities already present"
+fi
+
 # ---------------- Parse Arguments ----------------
 for arg in "$@"; do
     case "$arg" in
