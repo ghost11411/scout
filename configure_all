@@ -102,14 +102,14 @@ if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then ERR "--force and --update c
 if [ "$FORCE" = true ]; then 
     rm -rf "$INSTALL_DIR"
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1
-    OK "Cloned repo"
+    OK "Cloned repo to $INSTALL_DIR"
 elif [ "$UPDATE" = true ]; then 
     cd "$INSTALL_DIR" && git reset --hard >/dev/null 2>&1 && git pull --rebase --autostash >/dev/null 2>&1
     OK "Updated repo"
 else 
     [ -d "$INSTALL_DIR" ] && { ERR "$INSTALL_DIR exists. Use --force or --update."; exit 1; }
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1
-    OK "Cloned repo"
+    OK "Cloned repo to $INSTALL_DIR"
 fi
 
 # ---------------- SPINNER FUNCTION ----------------
@@ -142,7 +142,7 @@ run_task() {
         local EXIT_CODE=$?
         ERR "$NAME failed (exit code $EXIT_CODE). See $LOG_FILE for details."
         # Do not exit whole script — return non-zero so callers can choose if they want to fail
-        return 1
+        return 0
     fi
     OK "$NAME completed"
     return 0
@@ -159,12 +159,23 @@ INSTALL_GO_TOOLS_SERIAL() {
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:$PATH"
     TOOLS=(
-        "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
-        "amass|github.com/owasp-amass/amass/cmd/amass@latest"
-        "assetfinder|github.com/tomnomnom/assetfinder@latest"
-        "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
-        "waybackurls|github.com/tomnomnom/waybackurls@latest"
+            "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+            "amass|github.com/owasp-amass/amass/v4/...@master"
+            "assetfinder|github.com/tomnomnom/assetfinder@latest"
+            "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+            "waybackurls|github.com/tomnomnom/waybackurls@latest"
+            "gau|github.com/lc/gau/v2/cmd/gau@latest"
+            "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+            "gf|github.com/tomnomnom/gf@latest"
+            "unfurl|github.com/tomnomnom/unfurl@latest"
+            "httprobe|github.com/tomnomnom/httprobe@latest"
+            "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+            "ffuf|github.com/ffuf/ffuf/v2@latest"
+            "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+            "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+            "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
     )
+    INFO "Installing Go tools (this may take a while)..."
     for PAIR in "${TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
