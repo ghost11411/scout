@@ -82,15 +82,14 @@ for CMD in "${REQUIRED_CMDS[@]}"; do
 done
 
 if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
-    echo "[*] Missing commands: ${MISSING_CMDS[*]}"
     echo "[*] Installing..."
     if command -v apt >/dev/null 2>&1; then
         sudo apt update -y >/dev/null 2>&1
-        sudo apt install -y coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
+        sudo apt install -y coreutils util-linux findutils bash git curl wget unzip tar >/dev/null 2>&1
     elif command -v apk >/dev/null 2>&1; then
-        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
+        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar >/dev/null 2>&1
     elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar make gcc >/dev/null 2>&1
+        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar >/dev/null 2>&1
     else
         echo "[✘] Unsupported package manager. Install manually: ${MISSING_CMDS[*]}"
         exit 1
@@ -149,7 +148,7 @@ run_task() {
 }
 
 # ---------------- INSTALL FUNCTIONS (serial) ----------------
-INSTALL_APT_PACKAGES() { run_task "APT packages" bash -c 'sudo apt update -y && sudo apt install -y coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc curl wget zip cewl make ca-certificates libpcap-dev golang-go'; }
+INSTALL_APT_PACKAGES() { run_task "APT packages" bash -c 'sudo apt update -y && sudo apt install -y coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc make curl wget zip cewl make ca-certificates libpcap-dev golang-go'; }
 
 INSTALL_PIPX_TOOLS() {
     run_task "pipx" bash -c 'command -v pipx || python3 -m pip install --user pipx; python3 -m pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"; pipx install --force arjun'
