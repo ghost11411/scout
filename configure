@@ -173,7 +173,7 @@ END_EPOCH=$(date +%s)
 DURATION=$(( END_EPOCH - START_EPOCH ))
 TIMETOOK=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $(( (DURATION%3600)/60 )) $((DURATION%60)) )
 
-echo -e "${GREEN}[+]$TIMETOOK${RESET}: ${TIMETOOK}"
+echo -e "${GREEN}[+] Time took for installation: $TIMETOOK${RESET}"
 
 OK "Scout installation completed successfully!"
 # ---------------- End ----------------

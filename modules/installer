@@ -193,7 +193,7 @@ INSTALL_PIPX_TOOLS() {
     if ! CHECK_COMMAND pipx; then
         INFO "Installing pipx"
         RUN_WITH_SPINNER "Install pipx" python3 -m pip install --user pipx >/dev/null 2>&1 || true
-        RUN_CMD "Ensure pipx path" python3 -m pipx ensurepath || true
+        RUN_CMD "Ensure pipx path" python3 -m pipx ensurepath >/dev/null 2>&1 || true
     fi
     export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
     for T in "${PIPX_TOOLS[@]}"; do
