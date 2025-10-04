@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ---------------- Colors ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m";
 VER=v0.1
 
 # ---------------- Variables ----------------
@@ -34,7 +34,7 @@ EOF
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
   while IFS= read -r LINE; do
     for ((i=0;i<${#LINE};i++)); do
-      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
       sleep 0.0008
     done
     printf "\n"
