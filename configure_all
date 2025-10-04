@@ -5,28 +5,6 @@ IFS=$'\n\t'
 # ---------------- PATH & ESSENTIALS ----------------
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-REQUIRED_CMDS=(sleep chmod ln rm git curl wget unzip tar bash make gcc go)
-MISSING_CMDS=()
-for CMD in "${REQUIRED_CMDS[@]}"; do
-    command -v "$CMD" >/dev/null 2>&1 || MISSING_CMDS+=("$CMD")
-done
-
-if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
-    echo "[*] Missing commands: ${MISSING_CMDS[*]}"
-    echo "[*] Installing..."
-    if command -v apt >/dev/null 2>&1; then
-        sudo apt update -y >/dev/null 2>&1
-        sudo apt install -y coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
-    elif command -v apk >/dev/null 2>&1; then
-        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
-    elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar make gcc >/dev/null 2>&1
-    else
-        echo "[✘] Unsupported package manager. Install manually: ${MISSING_CMDS[*]}"
-        exit 1
-    fi
-fi
-
 # ---------------- VARIABLES ----------------
 REPO_URL="https://github.com/ghost11411/scout"
 INSTALL_DIR="${HOME}/scout"
@@ -96,6 +74,28 @@ INFO "Starting Scout full installation..."
 
 # ---------------- ROOT CHECK ----------------
 [ "$EUID" -ne 0 ] && { ERR "Run as root"; exit 1; }
+
+REQUIRED_CMDS=(sleep chmod ln rm git curl wget unzip tar bash make gcc go)
+MISSING_CMDS=()
+for CMD in "${REQUIRED_CMDS[@]}"; do
+    command -v "$CMD" >/dev/null 2>&1 || MISSING_CMDS+=("$CMD")
+done
+
+if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
+    echo "[*] Missing commands: ${MISSING_CMDS[*]}"
+    echo "[*] Installing..."
+    if command -v apt >/dev/null 2>&1; then
+        sudo apt update -y >/dev/null 2>&1
+        sudo apt install -y coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
+    elif command -v apk >/dev/null 2>&1; then
+        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar make gcc >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar make gcc >/dev/null 2>&1
+    else
+        echo "[✘] Unsupported package manager. Install manually: ${MISSING_CMDS[*]}"
+        exit 1
+    fi
+fi
 
 # ---------------- FLAG HANDLING ----------------
 if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then ERR "--force and --update cannot be used together"; exit 1; fi
