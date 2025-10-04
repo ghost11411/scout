@@ -2,6 +2,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # ---------------- CONFIG ----------------
 INSTALL_DIR="${HOME}/scout"
 TOOLS_DIR="${INSTALL_DIR}/tools"
@@ -13,7 +15,7 @@ mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR"
 : > "$LOG_FILE"
 
 # ---------------- COLORS ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 VER=v0.1
 
 OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
@@ -43,7 +45,7 @@ EOF
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
   while IFS= read -r LINE; do
     for ((i=0;i<${#LINE};i++)); do
-      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
       sleep 0.0008
     done
     printf "\n"
@@ -140,7 +142,7 @@ GO_TOOLS=(
 )
 
 APT_PACKAGES=(
-    whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
+    coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
 )
 
 PIPX_TOOLS=("arjun")
@@ -244,15 +246,15 @@ INSTALL_MASSCAN() {
     fi
 }
 
-INSTALL_NMAP_STATIC() {
+INSTALL_NMAP() {
     local ARCH
     ARCH=$(uname -m || true)
     if [ "$ARCH" = "x86_64" ]; then
         local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
-        INFO "Fetching static nmap"
-        curl -fsSL "$URL" -o "$BIN_DIR/nmap" 2>>"$LOG_FILE" && chmod +x "$BIN_DIR/nmap" && OK "nmap (static)" || WARN "Failed to fetch static nmap"
+        INFO "Fetching nmap"
+        curl -fsSL "$URL" -o "$BIN_DIR/nmap" 2>>"$LOG_FILE" && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
     else
-        INFO "Skipping static nmap for arch $ARCH"
+        INFO "Skipping nmap for arch $ARCH"
     fi
 }
 
@@ -292,7 +294,7 @@ CLONE_OR_UPDATE_REPOS() {
 }
 
 UPDATE_NUCLEI_TEMPLATES() {
-    CHECK_COMMAND nuclei && RUN_WITH_SPINNER "Nuclei templates update" nuclei -ut || WARN "nuclei not found; skip templates update"
+    CHECK_COMMAND nuclei && RUN_WITH_SPINNER "Nuclei templates update" "$BIN_DIR/nuclei" -ut || WARN "nuclei not found; skip templates update"
 }
 
 # ---------------- MAIN INSTALL ----------------
@@ -303,7 +305,7 @@ ENSURE_BASIC_COMMANDS || true
 INSTALL_PIPX_TOOLS || true
 INSTALL_GO_TOOLS_ONE_BY_ONE || true
 INSTALL_MASSCAN || true
-INSTALL_NMAP_STATIC || true
+INSTALL_NMAP || true
 INSTALL_FINDOMAIN || true
 CLONE_OR_UPDATE_REPOS || true
 UPDATE_NUCLEI_TEMPLATES || true
