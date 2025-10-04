@@ -8,7 +8,7 @@ TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
-LOG_FILE="$INSTALL_DIR/install.log"
+LOG_FILE="/tmp/scout_installer.log"
 mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR"
 : > "$LOG_FILE"
 

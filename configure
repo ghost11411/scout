@@ -11,7 +11,7 @@ REPO_URL="https://github.com/ghost11411/scout"
 INSTALL_DIR="/root/scout"
 FORCE=false
 UPDATE=false
-LOG_FILE="$INSTALL_DIR/install.log"
+LOG_FILE="/tmp/scout_configure.log"
 touch "$LOG_FILE"
 : > "$LOG_FILE"
 
