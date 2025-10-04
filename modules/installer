@@ -94,12 +94,14 @@ SPINNER_WAIT_PIDS() {
             if kill -0 "$P" 2>/dev/null; then RUNNING=1; break; fi
         done
         [ "$RUNNING" -eq 0 ] && break
+
         local CHAR="${BRAILLE_STYLE_SPINNER_CHARS[I % ${#BRAILLE_STYLE_SPINNER_CHARS[@]}]}"
         if [ -n "$MSG" ]; then
-            printf "\r[%s] %s " "$CHAR" "$MSG"
+            printf "\r${YELLOW}[%s] %s${RESET} " "$CHAR" "$MSG"
         else
-            printf "\r[%s] Working... " "$CHAR"
+            printf "\r${YELLOW}[%s] Working...${RESET} " "$CHAR"
         fi
+
         I=$((I+1))
         sleep 0.12
     done
