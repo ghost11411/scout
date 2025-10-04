@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# ---------------- PATH ----------------
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# ---------------- COLORS ----------------
+GREEN="\e[92m"; BLUE="\e[94m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"
+
+OK() { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR() { printf "${RED}[✘] %s${RESET}\n" "$1"; echo "$(date --iso-8601=seconds) - $1" >> "/tmp/scout_installer.log"; }
+
+# ---------------- GLOBALS ----------------
+VER=v0.4
+INSTALL_DIR="${HOME}/scout"
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+LOG_FILE="/tmp/scout_installer.log"
+REPO_URL="https://github.com/ghost11411/scout"
+DRY_RUN=false
+mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR"
+: > "$LOG_FILE"
+
+# ---------------- Parse args ----------------
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        *) ERR "Unknown option: $arg"; exit 1 ;;
+    esac
+done
+
+# ---------------- Spinner ----------------
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    while kill -0 $pid 2>/dev/null; do
+        for ((i=0; i<${#spinstr}; i++)); do
+            printf "\r[%c] Working..." "${spinstr:i:1}"
+            sleep $delay
+        done
+    done
+    printf "\r\033[K"
+}
+
+run_with_spinner() {
+    local cmd="$1"
+    local name="$2"
+    local start=$(date +%s)
+    if [ "$DRY_RUN" = true ]; then
+        INFO "[DRY-RUN] Would run: $cmd"
+        return
+    fi
+    bash -c "$cmd" & pid=$!
+    spinner $pid
+    wait $pid || ERR "$name failed"
+    local end=$(date +%s)
+    local elapsed=$((end - start))
+    OK "$name finished in $(printf '%02d:%02d:%02d' $((elapsed/3600)) $(((elapsed%3600)/60)) $((elapsed%60)))"
+}
+
+# ---------------- BANNER ----------------
+banner() {
+    echo -e "${BOLD}${GREEN}
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
+   \______/  \______/  \______/  \______/    |__/   
+${RESET}"
+    echo -e "${CYAN}Recon Made Easy   |   Made By Ghost | ${VER}${RESET}\n"
+}
+
+# ---------------- START ----------------
+START=$(date +%s)
+banner
+INFO "Starting Scout installer..."
+
+# ---------------- Clone/Update Repo ----------------
+if [ -d "$INSTALL_DIR/.git" ]; then
+    run_with_spinner "cd $INSTALL_DIR && git reset --hard && git pull --rebase --autostash" "Updating Scout repo"
+else
+    run_with_spinner "git clone $REPO_URL $INSTALL_DIR" "Cloning Scout repo"
+fi
+
+export GOBIN="$BIN_DIR"
+export PATH="$GOBIN:$PATH"
+
+# ---------------- Go Tools ----------------
+GO_TOOLS=(
+    "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+    "amass|github.com/owasp-amass/amass/v4/...@master"
+    "assetfinder|github.com/tomnomnom/assetfinder@latest"
+    "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+    "waybackurls|github.com/tomnomnom/waybackurls@latest"
+    "gau|github.com/lc/gau/v2/cmd/gau@latest"
+    "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+    "gf|github.com/tomnomnom/gf@latest"
+    "unfurl|github.com/tomnomnom/unfurl@latest"
+    "httprobe|github.com/tomnomnom/httprobe@latest"
+    "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+    "ffuf|github.com/ffuf/ffuf/v2@latest"
+    "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+    "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+    "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
+)
+for pair in "${GO_TOOLS[@]}"; do
+    NAME="${pair%%|*}"
+    PKG="${pair#*|}"
+    run_with_spinner "GO111MODULE=on go install $PKG 2>>$LOG_FILE" "Go tool: $NAME"
+done
+
+# ---------------- Pipx Tools ----------------
+if ! command -v pipx >/dev/null 2>&1 && [ "$DRY_RUN" = false ]; then
+    python3 -m pip install --user pipx >/dev/null 2>>"$LOG_FILE" || true
+    python3 -m pipx ensurepath >/dev/null 2>>"$LOG_FILE" || true
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+PIPX_TOOLS=("arjun")
+for t in "${PIPX_TOOLS[@]}"; do
+    run_with_spinner "pipx install $t 2>>$LOG_FILE || true" "Pipx tool: $t"
+done
+
+# ---------------- Extra repos ----------------
+REPOS=(
+    "1ndianl33t/GF-Patterns|$GF_DIR|https://github.com/1ndianl33t/GF-Patterns.git"
+    "aboul3la/Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
+)
+for entry in "${REPOS[@]}"; do
+    IFS='|' read -r NAME PATH URL <<< "$entry"
+    if [ -d "$PATH/.git" ]; then
+        run_with_spinner "git -C $PATH pull --ff-only 2>>$LOG_FILE || true" "Updating repo: $NAME"
+    else
+        run_with_spinner "git clone --depth 1 $URL $PATH 2>>$LOG_FILE || true" "Cloning repo: $NAME"
+    fi
+done
+
+# ---------------- Masscan build ----------------
+if [ ! -x "$BIN_DIR/masscan" ]; then
+    TMP=$(mktemp -d)
+    run_with_spinner "git clone --depth 1 https://github.com/robertdavidgraham/masscan.git $TMP 2>>$LOG_FILE && cd $TMP && make -j$(nproc) 2>>$LOG_FILE && mv $TMP/bin/masscan $BIN_DIR/" "Masscan build"
+    chmod +x "$BIN_DIR/masscan" 2>>"$LOG_FILE" || true
+fi
+
+# ---------------- Static nmap ----------------
+ARCH=$(uname -m || true)
+if [ "$ARCH" = "x86_64" ] && [ ! -x "$BIN_DIR/nmap" ]; then
+    run_with_spinner "curl -fsSL https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap -o $BIN_DIR/nmap 2>>$LOG_FILE && chmod +x $BIN_DIR/nmap" "Nmap static"
+fi
+
+# ---------------- Findomain ----------------
+if [ ! -x "$BIN_DIR/findomain" ]; then
+    VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>$LOG_FILE | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
+    TMP=$(mktemp -d)
+    run_with_spinner "curl -fsSL -L https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip -o $TMP/findomain.zip 2>>$LOG_FILE && unzip -o $TMP/findomain.zip -d $TMP >/dev/null 2>>$LOG_FILE && mv $TMP/findomain $BIN_DIR/" "Findomain install"
+    chmod +x "$BIN_DIR/findomain" 2>>"$LOG_FILE" || true
+fi
+
+# ---------------- Nuclei templates ----------------
+command -v nuclei >/dev/null 2>&1 && run_with_spinner "$BIN_DIR/nuclei -ut 2>>$LOG_FILE" "Updating Nuclei templates" || WARN "nuclei not found; skipping templates update"
+
+# ---------------- Permissions & Symlink ----------------
+chmod 755 "$BIN_DIR"/* 2>>"$LOG_FILE" || true
+if [ -w /usr/local/bin ]; then
+    ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout 2>>"$LOG_FILE" && OK "Symlink created"
+elif sudo -n true 2>/dev/null; then
+    sudo ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout 2>>"$LOG_FILE" && OK "Symlink created (sudo)"
+else
+    WARN "Could not symlink; run manually: sudo ln -sf $INSTALL_DIR/scout /usr/local/bin/scout"
+fi
+
+# ---------------- Finish ----------------
+END=$(date +%s)
+ELAPSED=$((END-START))
+echo -e "${GREEN}[+] Total installation time: $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED%3600)/60)) $((ELAPSED%60)))${RESET}"
+OK "Scout installation finished. Run 'scout --help' to get started."
