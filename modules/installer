@@ -2,8 +2,43 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Ensure standard system paths are included
+# ---------------- Ensure PATH ----------------
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# ---------------- Bootstrap essential utilities ----------------
+REQUIRED_CMDS=(sleep chmod ln rm git curl wget unzip tar make gcc go)
+
+MISSING_CMDS=()
+for CMD in "${REQUIRED_CMDS[@]}"; do
+    if ! command -v "$CMD" >/dev/null 2>&1; then
+        MISSING_CMDS+=("$CMD")
+    fi
+done
+
+if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
+    echo "[*] Missing essential commands: ${MISSING_CMDS[*]}"
+    echo "[*] Installing missing utilities..."
+    if command -v apt >/dev/null 2>&1; then
+        sudo apt update -y
+        sudo apt install -y coreutils util-linux findutils git curl wget unzip tar make gcc golang-go
+    elif command -v apk >/dev/null 2>&1; then
+        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar make gcc go
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar make gcc golang
+    else
+        echo "[✘] Unsupported package manager. Install these manually: ${MISSING_CMDS[*]}"
+        exit 1
+    fi
+    echo "[✔] Essential utilities installed"
+fi
+
+# Verify that PATH now contains the commands
+for CMD in "${REQUIRED_CMDS[@]}"; do
+    if ! command -v "$CMD" >/dev/null 2>&1; then
+        echo "[✘] Command still not found after install: $CMD"
+        exit 1
+    fi
+done
 
 # ---------------- CONFIG ----------------
 INSTALL_DIR="${HOME}/scout"
@@ -23,25 +58,6 @@ OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; echo "$(date --iso-8601=seconds) - $1" >> "$LOG_FILE"; }
-
-# ---------------- Bootstrap Core Utilities ----------------
-INFO "Checking base utilities..."
-if ! command -v sleep >/dev/null || ! command -v chmod >/dev/null || ! command -v ln >/dev/null; then
-    INFO "Installing base system utilities..."
-    if command -v apt >/dev/null; then
-        apt update -y && apt install -y coreutils util-linux findutils
-    elif command -v apk >/dev/null; then
-        apk add --no-cache coreutils util-linux findutils bash
-    elif command -v yum >/dev/null; then
-        yum install -y coreutils util-linux findutils
-    else
-        ERR "Unsupported package manager. Please install coreutils/util-linux manually."
-        exit 1
-    fi
-    OK "Base utilities installed"
-else
-    OK "Base utilities already present"
-fi
 
 # ---------------- BRAILLE SPINNER ----------------
 BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
