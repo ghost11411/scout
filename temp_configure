@@ -70,50 +70,60 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ---------------- Handle Flags ----------------
-
 if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then
     ERR "--force and --update cannot be used together."
     exit 1
-fi
 
-if [ "$FORCE" = true ]; then
+elif [ "$FORCE" = true ]; then
     WARN "--force flag detected..."
-    INFO "Removing $INSTALL_DIR..."
-    rm -rf "$INSTALL_DIR"
-    OK "Removed $INSTALL_DIR" >/dev/null 2>&1 || true
-    INFO "Cloning..."
+    if [ -d "$INSTALL_DIR" ]; then
+        INFO "Removing existing installation at $INSTALL_DIR..."
+        rm -rf "$INSTALL_DIR"
+        OK "Removed $INSTALL_DIR"
+    fi
+
+    INFO "Cloning fresh repository..."
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
         ERR "Failed to clone repository. Check your network connection."
         exit 1
     }
-    OK "Cloned Repo to $INSTALL_DIR"
-fi
+    OK "Cloned repository to $INSTALL_DIR"
 
-if [ "$UPDATE" = true ]; then
+elif [ "$UPDATE" = true ]; then
     WARN "--update flag detected..."
     if [ -d "$INSTALL_DIR/.git" ]; then
         cd "$INSTALL_DIR" || exit 1
+        INFO "Updating existing repository..."
         git reset --hard >/dev/null 2>&1
         git pull --rebase --autostash >/dev/null 2>&1
-        OK "Updated Repo at $INSTALL_DIR"
+        OK "Updated repository at $INSTALL_DIR"
+    elif [ -d "$INSTALL_DIR" ]; then
+        ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
+        exit 1
     else
-        ERR "No existing repo found at $INSTALL_DIR, use --force to fresh install."
+        ERR "No existing installation found. Use --force to perform a fresh install."
         exit 1
     fi
-fi
 
-if [ "$FORCE" = false ] && [ "$UPDATE" = false ]; then
+else
     WARN "No flags detected, proceeding with default behavior..."
     if [ -d "$INSTALL_DIR" ]; then
-        ERR "Installation directory $INSTALL_DIR already exists. Use --force to overwrite or --update to update."
+        if [ -d "$INSTALL_DIR/.git" ]; then
+            ERR "Installation directory $INSTALL_DIR already exists. Use --update to update or --force to reinstall."
+        else
+            ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
+        fi
         exit 1
     fi
-    INFO "Cloning Repo to '$INSTALL_DIR'..."
+
+    INFO "Cloning repository to '$INSTALL_DIR'..."
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
         ERR "Failed to clone repository. Check your network connection."
         exit 1
     }
+    OK "Cloned repository to $INSTALL_DIR"
 fi
+
 
 # ---------------- Permissions ----------------
 INFO "Setting executable permissions for scripts..."
