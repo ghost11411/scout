@@ -131,7 +131,7 @@ find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
 
 # ---------------- Locate Installer ----------------
 INFO "Searching for installer script..."
-INSTALLER_PATH=$(find "$INSTALL_DIR" -type f -name "temp_installer" | head -n 1 || true)
+INSTALLER_PATH=$(find "$INSTALL_DIR" -type f -name "installer" | head -n 1 || true)
 INFO "Installer script found at: $INSTALLER_PATH"
 
 if [ -z "$INSTALLER_PATH" ]; then
