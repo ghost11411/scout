@@ -2,44 +2,6 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# ---------------- Ensure PATH ----------------
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-
-# ---------------- Bootstrap essential utilities ----------------
-REQUIRED_CMDS=(sleep chmod ln rm git curl wget unzip tar make gcc go)
-
-MISSING_CMDS=()
-for CMD in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "$CMD" >/dev/null 2>&1; then
-        MISSING_CMDS+=("$CMD")
-    fi
-done
-
-if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
-    echo "[*] Missing essential commands: ${MISSING_CMDS[*]}"
-    echo "[*] Installing missing utilities..."
-    if command -v apt >/dev/null 2>&1; then
-        sudo apt update -y
-        sudo apt install -y coreutils util-linux findutils git curl wget unzip tar make gcc golang-go
-    elif command -v apk >/dev/null 2>&1; then
-        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar make gcc go
-    elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar make gcc golang
-    else
-        echo "[✘] Unsupported package manager. Install these manually: ${MISSING_CMDS[*]}"
-        exit 1
-    fi
-    echo "[✔] Essential utilities installed"
-fi
-
-# Verify that PATH now contains the commands
-for CMD in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "$CMD" >/dev/null 2>&1; then
-        echo "[✘] Command still not found after install: $CMD"
-        exit 1
-    fi
-done
-
 # ---------------- CONFIG ----------------
 INSTALL_DIR="${HOME}/scout"
 TOOLS_DIR="${INSTALL_DIR}/tools"
@@ -59,9 +21,6 @@ INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1"; echo "$(date --iso-8601=seconds) - $1" >> "$LOG_FILE"; }
 
-# ---------------- BRAILLE SPINNER ----------------
-BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-
 # ---------------- ASCII BANNER ----------------
 BANNER(){
   ASCII_SCOUT=$(cat <<'EOF'
@@ -79,19 +38,8 @@ EOF
   TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
 
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0008
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.002
-  done
-  printf "\n\n"
+  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
+  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
@@ -99,7 +47,7 @@ EOF
 RUN_CMD() {
     local DESC="$1"
     shift
-    if "$@" 2>>"$LOG_FILE"; then
+    if "$@" >>"$LOG_FILE" 2>&1; then
         OK "$DESC"
         return 0
     else
@@ -109,54 +57,6 @@ RUN_CMD() {
 }
 
 CHECK_COMMAND() { command -v "$1" >/dev/null 2>&1; }
-
-SPINNER_WAIT_PIDS() {
-    local -a PIDS=()
-    local MSG=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            ''|*[!0-9]*) MSG="$*"; break ;;
-            *) PIDS+=("$1"); shift ;;
-        esac
-    done
-
-    if [ ! -t 1 ]; then
-        for P in "${PIDS[@]}"; do wait "$P" 2>/dev/null || true; done
-        return
-    fi
-
-    local I=0
-    while :; do
-        local RUNNING=0
-        for P in "${PIDS[@]}"; do
-            if kill -0 "$P" 2>/dev/null; then RUNNING=1; break; fi
-        done
-        [ "$RUNNING" -eq 0 ] && break
-
-        local CHAR="${BRAILLE_STYLE_SPINNER_CHARS[I % ${#BRAILLE_STYLE_SPINNER_CHARS[@]}]}"
-        if [ -n "$MSG" ]; then
-            printf "\r${YELLOW}[%s] %s${RESET} " "$CHAR" "$MSG"
-        else
-            printf "\r${YELLOW}[%s] Working...${RESET} " "$CHAR"
-        fi
-
-        I=$((I+1))
-        sleep 0.12
-    done
-    printf "\r\033[K"
-}
-
-RUN_WITH_SPINNER() {
-    local MSG="$1"
-    shift
-    "$@" 2>>"$LOG_FILE" & local PID=$!
-    SPINNER_WAIT_PIDS "$PID" "$MSG"
-    wait "$PID" || return 1
-    OK "$MSG"
-    return 0
-}
-
-RUN_SYNC_WITH_SPINNER() { RUN_WITH_SPINNER "$1" "${@:2}"; }
 
 # ---------------- TOOLSETS ----------------
 GO_TOOLS=(
@@ -184,19 +84,9 @@ APT_PACKAGES=(
 PIPX_TOOLS=("arjun")
 
 REPOS=(
-    "1ndianl33t/GF-Patterns|$GF_DIR|https://github.com/1ndianl33t/GF-Patterns.git"
-    "aboul3la/Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
+    "GF-Patterns|$GF_DIR|https://github.com/1ndianl33t/GF-Patterns.git"
+    "Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
 )
-
-# ---------------- CLEANUP ----------------
-CLEANUP_ITEMS=()
-CLEANUP() {
-    jobs -p 2>/dev/null | xargs -r -n1 kill 2>/dev/null || true
-    for ITEM in "${CLEANUP_ITEMS[@]:-}"; do
-        [ -e "$ITEM" ] && rm -rf "$ITEM" || true
-    done
-}
-trap CLEANUP EXIT
 
 # ---------------- ACTIONS ----------------
 ENSURE_BASIC_COMMANDS() {
@@ -212,28 +102,23 @@ ENSURE_BASIC_COMMANDS() {
 
 INSTALL_APT_PACKAGES() {
     INFO "Updating apt cache..."
-    sudo apt update -y >/dev/null 2>>"$LOG_FILE" & PID=$!
-    SPINNER_WAIT_PIDS "$PID" "apt update"
-    wait "$PID" || true
-
+    sudo apt update -y >>"$LOG_FILE" 2>&1 || WARN "apt update failed"
     INFO "Installing apt packages..."
-    sudo apt install -y "${APT_PACKAGES[@]}" >/dev/null 2>>"$LOG_FILE" & PID=$!
-    SPINNER_WAIT_PIDS "$PID" "apt install"
-    wait "$PID" || true
-
+    sudo apt install -y "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1 || WARN "apt install failed"
     OK "apt packages installed"
 }
 
 INSTALL_PIPX_TOOLS() {
     if ! CHECK_COMMAND pipx; then
         INFO "Installing pipx"
-        RUN_WITH_SPINNER "Install pipx" python3 -m pip install --user pipx >/dev/null 2>&1 || true
-        RUN_CMD "Ensure pipx path" python3 -m pipx ensurepath >/dev/null 2>&1 || true
+        python3 -m pip install --user pipx >>"$LOG_FILE" 2>&1 || true
+        python3 -m pipx ensurepath >>"$LOG_FILE" 2>&1 || true
     fi
-    export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+    # export PATH="$HOME/.local/bin:$PATH"
     for T in "${PIPX_TOOLS[@]}"; do
         if ! pipx list | grep -qE "^\s*$T" 2>/dev/null; then
-            RUN_WITH_SPINNER "pipx install: $T" python3 -m pipx install "$T" >/dev/null 2>&1 || true
+            python3 -m pipx install "$T" >>"$LOG_FILE" 2>&1 || true
+            OK "Installed $T via pipx"
         else
             INFO "$T already installed via pipx"
         fi
@@ -246,16 +131,13 @@ INSTALL_GO_TOOLS_ONE_BY_ONE() {
         return
     fi
     export GOBIN="$BIN_DIR"
-    export PATH="$GOBIN:$PATH"
+    export PATH="$GOBIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
     INFO "Installing Go tools..."
     for PAIR in "${GO_TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
-        MSG="go install: $NAME"
-        ( env GOBIN="$GOBIN" go install "$PKG" 2>>"$LOG_FILE" ) & PID=$!
-        SPINNER_WAIT_PIDS "$PID" "$MSG"
-        if wait "$PID"; then
+        if env GOBIN="$GOBIN" go install "$PKG" >>"$LOG_FILE" 2>&1; then
             OK "$NAME"
         else
             ERR "$NAME failed"
@@ -270,9 +152,8 @@ INSTALL_MASSCAN() {
     fi
     local DIR
     DIR=$(mktemp -d)
-    CLEANUP_ITEMS+=("$DIR")
-    RUN_WITH_SPINNER "Clone masscan" git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >/dev/null 2>&1 || return 1
-    RUN_WITH_SPINNER "Build masscan" bash -lc "cd '$DIR' && make -j$(nproc)" >/dev/null 2>&1 || return 1
+    git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >>"$LOG_FILE" 2>&1 || return 1
+    make -C "$DIR" -j"$(nproc)" >>"$LOG_FILE" 2>&1 || return 1
     if [ -f "$DIR/bin/masscan" ]; then
         mv "$DIR/bin/masscan" "$BIN_DIR/"
         chmod +x "$BIN_DIR/masscan"
@@ -280,18 +161,17 @@ INSTALL_MASSCAN() {
     else
         ERR "masscan build failed"
     fi
+    rm -r "$DIR"/* 2>/dev/null || true
 }
 
 INSTALL_NMAP() {
-    local ARCH
-    ARCH=$(uname -m || true)
-    if [ "$ARCH" = "x86_64" ]; then
-        local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
-        INFO "Fetching nmap"
-        curl -fsSL "$URL" -o "$BIN_DIR/nmap" 2>>"$LOG_FILE" && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
-    else
-        INFO "Skipping nmap for arch $ARCH"
+    if [ -x "$BIN_DIR/nmap" ]; then
+        INFO "nmap already installed"
+        return
     fi
+    local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
+    INFO "Installing nmap"
+    curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1 && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
 }
 
 INSTALL_FINDOMAIN() {
@@ -304,9 +184,8 @@ INSTALL_FINDOMAIN() {
     VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>"$LOG_FILE" | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
     [ -z "$VER" ] && { WARN "Could not determine findomain latest version"; return; }
     TMP=$(mktemp -d)
-    CLEANUP_ITEMS+=("$TMP")
-    RUN_WITH_SPINNER "Download findomain $VER" curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" || return 1
-    RUN_WITH_SPINNER "Unzip findomain" unzip -o "$TMP/findomain.zip" -d "$TMP" >/dev/null 2>>"$LOG_FILE"
+    curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" >>"$LOG_FILE" 2>&1
+    unzip -o "$TMP/findomain.zip" -d "$TMP" >>"$LOG_FILE" 2>&1 || true
     if [ -f "$TMP/findomain" ]; then
         mv "$TMP/findomain" "$BIN_DIR/findomain"
         chmod +x "$BIN_DIR/findomain"
@@ -314,23 +193,30 @@ INSTALL_FINDOMAIN() {
     else
         WARN "findomain binary not found"
     fi
+    rm -r "$TMP"/* 2>/dev/null || true
 }
 
 CLONE_OR_UPDATE_REPOS() {
     for ENTRY in "${REPOS[@]}"; do
         IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
-        if [ -d "$PATH/.git" ]; then
+        if [ -d "$INSTALL_DIR/.git" ]; then
             INFO "Updating $NAME"
-            RUN_WITH_SPINNER "git pull $NAME" git -C "$PATH" pull --ff-only || true
+            git -C "$INSTALL_DIR" pull --ff-only >>"$LOG_FILE" 2>&1 || true
         else
             INFO "Cloning $NAME"
-            RUN_WITH_SPINNER "git clone $NAME" git clone --depth 1 "$GITURL" "$PATH" || true
+            git clone --depth 1 "$GITURL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || true
         fi
+        OK "$NAME setup complete"
     done
 }
 
 UPDATE_NUCLEI_TEMPLATES() {
-    CHECK_COMMAND nuclei && RUN_WITH_SPINNER "Nuclei templates update" "$BIN_DIR/nuclei" -ut || WARN "nuclei not found; skip templates update"
+    chmod -x "$BIN_DIR/nuclei" 2>/dev/null || true
+    if [ -x "$BIN_DIR/nuclei" ]; then
+        "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
+    else
+        WARN "nuclei not found; skip templates update"
+    fi
 }
 
 # ---------------- MAIN INSTALL ----------------
@@ -343,7 +229,6 @@ INSTALL_GO_TOOLS_ONE_BY_ONE || true
 INSTALL_MASSCAN || true
 INSTALL_NMAP || true
 INSTALL_FINDOMAIN || true
-echo -e "${GREEN}[+] PATH set to: $PATH${RESET}"
 CLONE_OR_UPDATE_REPOS || true
 UPDATE_NUCLEI_TEMPLATES || true
 
