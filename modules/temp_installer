@@ -88,15 +88,6 @@ REPOS=(
     "aboul3la/Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
 )
 
-# ---------------- CLEANUP ----------------
-CLEANUP_ITEMS=()
-CLEANUP() {
-    for ITEM in "${CLEANUP_ITEMS[@]:-}"; do
-        [ -e "$ITEM" ] && rm -rf "$ITEM" || true
-    done
-}
-trap CLEANUP EXIT
-
 # ---------------- ACTIONS ----------------
 ENSURE_BASIC_COMMANDS() {
     local OKAY=0
@@ -139,10 +130,8 @@ INSTALL_GO_TOOLS_ONE_BY_ONE() {
         WARN "Go not found; skipping Go tools"
         return
     fi
-    echo "Sleeping 2s before env set"; sleep 2
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-    echo "Sleeping 2s after env set"; sleep 2
 
     INFO "Installing Go tools..."
     for PAIR in "${GO_TOOLS[@]}"; do
@@ -163,7 +152,6 @@ INSTALL_MASSCAN() {
     fi
     local DIR
     DIR=$(mktemp -d)
-    CLEANUP_ITEMS+=("$DIR")
     git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >>"$LOG_FILE" 2>&1 || return 1
     make -C "$DIR" -j"$(nproc)" >>"$LOG_FILE" 2>&1 || return 1
     if [ -f "$DIR/bin/masscan" ]; then
@@ -173,18 +161,17 @@ INSTALL_MASSCAN() {
     else
         ERR "masscan build failed"
     fi
+    rm -r "$TMP"/* 2>/dev/null || true
 }
 
 INSTALL_NMAP() {
-    local ARCH
-    ARCH=$(uname -m || true)
-    if [ "$ARCH" = "x86_64" ]; then
-        local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
-        INFO "Installing nmap"
-        curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1 && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
-    else
-        INFO "Skipping nmap for arch $ARCH"
+    if [ -x "$BIN_DIR/nmap" ]; then
+        INFO "nmap already installed"
+        return
     fi
+    local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
+    INFO "Installing nmap"
+    curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1 && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
 }
 
 INSTALL_FINDOMAIN() {
@@ -197,7 +184,6 @@ INSTALL_FINDOMAIN() {
     VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>"$LOG_FILE" | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
     [ -z "$VER" ] && { WARN "Could not determine findomain latest version"; return; }
     TMP=$(mktemp -d)
-    CLEANUP_ITEMS+=("$TMP")
     curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" >>"$LOG_FILE" 2>&1
     unzip -o "$TMP/findomain.zip" -d "$TMP" >>"$LOG_FILE" 2>&1 || true
     if [ -f "$TMP/findomain" ]; then
@@ -207,6 +193,7 @@ INSTALL_FINDOMAIN() {
     else
         WARN "findomain binary not found"
     fi
+    rm -r "$TMP"/* 2>/dev/null || true
 }
 
 CLONE_OR_UPDATE_REPOS() {
@@ -225,7 +212,7 @@ CLONE_OR_UPDATE_REPOS() {
 
 UPDATE_NUCLEI_TEMPLATES() {
     if CHECK_COMMAND nuclei; then
-        "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
+        chmod -x "$BIN_DIR/nuclei" && "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
     else
         WARN "nuclei not found; skip templates update"
     fi
