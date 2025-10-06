@@ -5,41 +5,6 @@ IFS=$'\n\t'
 # ---------------- Ensure PATH ----------------
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-# ---------------- Bootstrap essential utilities ----------------
-REQUIRED_CMDS=(sleep chmod ln rm git curl wget unzip tar bash)
-
-MISSING_CMDS=()
-for CMD in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "$CMD" >/dev/null 2>&1; then
-        MISSING_CMDS+=("$CMD")
-    fi
-done
-
-if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
-    echo "[*] Missing essential commands: ${MISSING_CMDS[*]}"
-    echo "[*] Installing missing utilities..."
-    if command -v apt >/dev/null 2>&1; then
-        sudo apt update -y
-        sudo apt install -y coreutils util-linux findutils git curl wget unzip tar bash
-    elif command -v apk >/dev/null 2>&1; then
-        sudo apk add --no-cache coreutils util-linux findutils bash git curl wget unzip tar
-    elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y coreutils util-linux findutils git curl wget unzip tar bash
-    else
-        echo "[✘] Unsupported package manager. Install manually: ${MISSING_CMDS[*]}"
-        exit 1
-    fi
-    echo "[✔] Essential utilities installed"
-fi
-
-# Verify that PATH now contains the commands
-for CMD in "${REQUIRED_CMDS[@]}"; do
-    if ! command -v "$CMD" >/dev/null 2>&1; then
-        echo "[✘] Command still not found after install: $CMD"
-        exit 1
-    fi
-done
-
 # ---------------- Colors ----------------
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m";
 VER=v0.1
@@ -70,19 +35,8 @@ EOF
   TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
 
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0008
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.002
-  done
-  printf "\n\n"
+  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
+  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
@@ -105,8 +59,6 @@ for arg in "$@"; do
     esac
 done
 
-START_EPOCH=$(date +%s)
-
 # ---------------- Start Installation ----------------
 BANNER
 INFO "Starting Scout installation..."
@@ -117,13 +69,13 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# --- Mutual exclusivity for flags ---
+# ---------------- Handle Flags ----------------
+
 if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then
     ERR "--force and --update cannot be used together."
     exit 1
 fi
 
-# ---------------- Handle Flags ----------------
 if [ "$FORCE" = true ]; then
     WARN "--force flag detected..."
     INFO "Removing $INSTALL_DIR..."
@@ -134,7 +86,7 @@ if [ "$FORCE" = true ]; then
         ERR "Failed to clone repository. Check your network connection."
         exit 1
     }
-    OK "Cloned Repo to $INSTALL_DIR" 
+    OK "Cloned Repo to $INSTALL_DIR"
 fi
 
 if [ "$UPDATE" = true ]; then
@@ -143,7 +95,7 @@ if [ "$UPDATE" = true ]; then
         cd "$INSTALL_DIR" || exit 1
         git reset --hard >/dev/null 2>&1
         git pull --rebase --autostash >/dev/null 2>&1
-        OK "Updated Repo at $INSTALL_DIR" 
+        OK "Updated Repo at $INSTALL_DIR"
     else
         ERR "No existing repo found at $INSTALL_DIR, use --force to fresh install."
         exit 1
@@ -156,7 +108,7 @@ if [ "$FORCE" = false ] && [ "$UPDATE" = false ]; then
         ERR "Installation directory $INSTALL_DIR already exists. Use --force to overwrite or --update to update."
         exit 1
     fi
-    INFO "Cloning Repo to $INSTALL_DIR" 
+    INFO "Cloning Repo to $INSTALL_DIR"
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
         ERR "Failed to clone repository. Check your network connection."
         exit 1
@@ -172,7 +124,7 @@ find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
 
 # ---------------- Locate Installer ----------------
 INFO "Searching for installer script..."
-INSTALLER_PATH=$(find "$INSTALL_DIR" -type f -name "installer" | head -n 1 || true)
+INSTALLER_PATH=$(find "$INSTALL_DIR" -type f -name "temp_installer" | head -n 1 || true)
 INFO "Installer script found at: $INSTALLER_PATH"
 
 if [ -z "$INSTALLER_PATH" ]; then
@@ -193,11 +145,6 @@ else
 fi
 
 # ---------------- Summary ----------------
-END_EPOCH=$(date +%s)
-DURATION=$(( END_EPOCH - START_EPOCH ))
-TIMETOOK=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $(((DURATION%3600)/60)) $((DURATION%60)) )
-
-echo -e "${GREEN}[+] Time took for installation: $TIMETOOK${RESET}"
 OK "Scout installation completed successfully!"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"

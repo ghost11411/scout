@@ -18,7 +18,7 @@ touch "$LOG_FILE"
 
 FORCE=false
 UPDATE=false
-VER=v0.2
+VER=v0.1
 START_TIME=$(date +%s)
 
 # ---------------- COLORS ----------------
