@@ -139,10 +139,10 @@ INSTALL_GO_TOOLS_ONE_BY_ONE() {
         WARN "Go not found; skipping Go tools"
         return
     fi
-    sleep 2
+    echo "Sleeping 2s before env set"; sleep 2
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-    sleep 2
+    echo "Sleeping 2s after env set"; sleep 2
 
     INFO "Installing Go tools..."
     for PAIR in "${GO_TOOLS[@]}"; do
