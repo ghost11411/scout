@@ -212,7 +212,7 @@ CLONE_OR_UPDATE_REPOS() {
 
 UPDATE_NUCLEI_TEMPLATES() {
     chmod -x "$BIN_DIR/nuclei" 2>/dev/null || true
-    if [ -x "$BIN_DIR/nuclei" ]; then; then
+    if [ -x "$BIN_DIR/nuclei" ]; then
         "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
     else
         WARN "nuclei not found; skip templates update"
