@@ -108,7 +108,7 @@ if [ "$FORCE" = false ] && [ "$UPDATE" = false ]; then
         ERR "Installation directory $INSTALL_DIR already exists. Use --force to overwrite or --update to update."
         exit 1
     fi
-    INFO "Cloning Repo to $INSTALL_DIR"
+    INFO "Cloning Repo to '$INSTALL_DIR'..."
     git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
         ERR "Failed to clone repository. Check your network connection."
         exit 1
