@@ -25,7 +25,6 @@ TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
-mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR" 2>/dev/null || true
 
 # ---------------- ASCII BANNER ----------------
 BANNER(){
@@ -108,6 +107,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# ---------------- Uninstall flow ----------------
 if [ "$UNINSTALL" = true ]; then
 	INFO "Running uninstaller flow..."
 	if [ ! -d "$INSTALL_DIR" ]; then
