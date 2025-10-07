@@ -304,7 +304,6 @@ INSTALL_APT_PACKAGES() {
 INSTALL_PIPX_TOOLS() {
 	# Ensure local bin path is present so pipx/pip --user install locations are usable
 	export PATH="$HOME/.local/bin:$BIN_DIR:$PATH"
-	mkdir -p "$BIN_DIR" 2>/dev/null || true
 
 	if ! CHECK_COMMAND pipx; then
 		INFO "Installing pipx (bootstrap via pip)"
