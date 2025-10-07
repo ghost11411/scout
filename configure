@@ -2,6 +2,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
@@ -19,7 +21,7 @@ WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
 
 APT_PACKAGES=(
-    coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
+    git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
 )
 
 GO_TOOLS=(
@@ -44,7 +46,7 @@ GO_TOOLS=(
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- LOGGING ----------------
-OK()      { printf "${GREEN}✅ %s${RESET}\n" "$1"; }
+OK()      { printf "\r${GREEN}✅ %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
@@ -58,33 +60,8 @@ RUN_CMD() {
     fi
 }
 
-# ---------------- SPINNER ----------------
-spinner() {
-    local pid=$1
-    local message=$2
-    local delay=0.1
-    local i=0
-    local BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-
-    tput civis  # hide cursor
-    printf "${BLUE}⚙️  %s " "$message"
-    while kill -0 "$pid" 2>/dev/null; do
-        printf "\r${BLUE}${BRAILLE_STYLE_SPINNER_CHARS[$i]}${RESET} %s" "$message"
-        i=$(( (i+1) % ${#BRAILLE_STYLE_SPINNER_CHARS[@]} ))
-        sleep $delay
-    done
-    wait "$pid" 2>/dev/null
-    local status=$?
-
-    # Ensure spinner line is fully cleared before returning
-    printf "\r\033[K"
-    tput cnorm  # restore cursor
-    return $status
-}
-
-
 # ---------------- CTRL+C HANDLER ----------------
-trap 'tput cnorm; echo -e "\n${RED}[✘] Installation interrupted by user.${RESET}"; exit 1' INT
+trap 'echo -e "\n${RED}[✘] Installation interrupted by user.${RESET}"; exit 1' INT
 
 # ---------------- START TIMER ----------------
 START_TIME=$(date +%s)
@@ -94,7 +71,7 @@ BANNER(){
   ASCII_SCOUT=$(cat <<'EOF'
     /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
    /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
-  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  | $$  \__/| $$  \__/| $$  | $$| $$  | $$   | $$   
   |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
    \____  $$| $$      | $$  | $$| $$  | $$   | $$   
    /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
@@ -104,8 +81,22 @@ EOF
   )
   TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
-  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
+  
+  # Animate ASCII letters line by line
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
+      sleep 0.0005
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  # Animate tagline
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    sleep 0.001
+  done
+  printf "\n\n"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
@@ -176,7 +167,7 @@ if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; th
         esac
     else
         INFO "Performing default install..."
-        FORCE=true
+        FORCE=false
     fi
 fi
 
@@ -192,14 +183,19 @@ fi
 # ---------------- FORCE / UPDATE ----------------
 if [ "$FORCE" = true ]; then
     WARN "--force flag detected"
-    RUN_CMD "Remove existing install" rm -rf -- "$INSTALL_DIR"
-    (git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning repository"
-    OK "Repository cloned to $INSTALL_DIR"
+    RUN_CMD "Remove existing install from $INSTALL_DIR" rm -rf -- "$INSTALL_DIR"
+    INFO "Cloning repository..."
+    git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 && OK "Repository cloned to $INSTALL_DIR"
 elif [ "$UPDATE" = true ]; then
     WARN "--update flag detected"
-    [ -d "$INSTALL_DIR/.git" ] && cd "$INSTALL_DIR" && \
-    (git reset --hard >>"$LOG_FILE" 2>&1 && git pull --rebase --autostash >>"$LOG_FILE" 2>&1) & spinner $! "Updating repository"
-    OK "Repository updated at $INSTALL_DIR"
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        cd "$INSTALL_DIR"
+        git reset --hard >>"$LOG_FILE" 2>&1
+        git pull --rebase --autostash >>"$LOG_FILE" 2>&1
+        OK "Repository updated at $INSTALL_DIR"
+    else
+        WARN "$INSTALL_DIR is not a git repo. Cannot update."
+    fi
 fi
 
 # ---------------- PREPARE DIRECTORIES ----------------
@@ -207,10 +203,12 @@ mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
 find "$INSTALL_DIR" -type f -exec chmod +x {} \; || true
 
 # ---------------- INSTALL APT PACKAGES ----------------
-(apt-get update -y -qq >>"$LOG_FILE" 2>&1) & spinner $! "Updating APT repositories..."
+INFO "Updating APT repositories..."
+apt-get update -y -qq >>"$LOG_FILE" 2>&1
 OK "APT repositories updated"
 
-(apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1) & spinner $! "Installing APT packages..."
+INFO "Installing APT packages..."
+apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1
 OK "APT packages installed"
 
 # ---------------- INSTALL GO TOOLS ----------------
@@ -222,27 +220,34 @@ if command -v go >/dev/null 2>&1; then
     for PAIR in "${GO_TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
-        (go install "$PKG" >>"$LOG_FILE" 2>&1) & spinner $! "Installing Go tool: $NAME"
-        OK "Installed $NAME"
+        INFO "Installing Go tool: $NAME..."
+        go install "$PKG" >>"$LOG_FILE" 2>&1 && OK "Installed $NAME"
     done
 fi
-INFO "Go tools installed"
 
 # ---------------- CLONE REPOS ----------------
-(git clone --depth 1 https://github.com/1ndianl33t/GF-Patterns.git "$GF_DIR" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning GF-Patterns..."
-OK "GF-Patterns cloned"
-
-(git clone --depth 1 https://github.com/aboul3la/Sublist3r.git "$BIN_DIR/Sublist3r" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning Sublist3r..."
-OK "Sublist3r cloned"
+for ENTRY in "GF-Patterns|$WORDLISTS_DIR/GF-Patterns|https://github.com/1ndianl33t/GF-Patterns.git" \
+             "Sublist3r|$BIN_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"; do
+    IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
+    if [ -d "$PATH/.git" ]; then
+        INFO "Updating $NAME..."
+        git -C "$PATH" pull --ff-only >>"$LOG_FILE" 2>&1 && OK "$NAME updated"
+    elif [ -d "$PATH" ]; then
+        WARN "$PATH exists but is not a git repo. Skipping $NAME"
+    else
+        INFO "Cloning $NAME..."
+        git clone --depth 1 "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1 && OK "$NAME cloned"
+    fi
+done
 
 # ---------------- SYMLINK ----------------
-chmod 755 "$BIN_DIR"/* 2>/dev/null || true
-[ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
-ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+/bin/chmod 755 "$BIN_DIR"/* 2>/dev/null || true
+[ -f "$INSTALL_DIR/scout" ] && /bin/chmod +x "$INSTALL_DIR/scout" || true
+/bin/ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
 OK "Symlink created"
 
 # ---------------- SHOW TOTAL TIME ----------------
-END_TIME=$(date +%s)
+END_TIME=$(/usr/bin/date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 INFO "Script completed in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
 
@@ -250,5 +255,5 @@ INFO "Script completed in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSE
 OK "Scout installation completed successfully!"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
-echo -e  "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
+echo -e "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
 exit 0
