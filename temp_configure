@@ -97,6 +97,23 @@ EOF
 	esac
 done
 
+# shellcheck disable=SC2317
+RUN_CMD() {
+	local DESC="$1"
+	shift
+	if [ "${DRY_RUN:-false}" = true ]; then
+		INFO "DRY-RUN: would run: $* -- ($DESC)"
+		return 0
+	fi
+	if "$@" >>"$LOG_FILE" 2>&1; then
+		OK "$DESC"
+		return 0
+	else
+		ERR "$DESC failed. Check $LOG_FILE"
+		return 1
+	fi
+}
+
 # ---------------- Start ----------------
 BANNER
 INFO "Starting Scout configure script..."
@@ -220,23 +237,7 @@ find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
 
 INFO "Preparing to run Installer actions..."
 
-# ---------------- Installer functions (merged and deduplicated) ----------------
-# shellcheck disable=SC2317
-RUN_CMD() {
-	local DESC="$1"
-	shift
-	if [ "${DRY_RUN:-false}" = true ]; then
-		INFO "DRY-RUN: would run: $* -- ($DESC)"
-		return 0
-	fi
-	if "$@" >>"$LOG_FILE" 2>&1; then
-		OK "$DESC"
-		return 0
-	else
-		ERR "$DESC failed. Check $LOG_FILE"
-		return 1
-	fi
-}
+# ---------------- Installer functions ----------------
 
 CHECK_COMMAND() { command -v "$1" >/dev/null 2>&1; }
 
