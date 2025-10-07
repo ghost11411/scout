@@ -25,10 +25,10 @@ WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
 mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR" 2>/dev/null || true
 
-# ---------------- Banner & Messages ----------------
+# ---------------- ASCII BANNER ----------------
 BANNER(){
   ASCII_SCOUT=$(cat <<'EOF'
-	/$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
    /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
   | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
   |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
