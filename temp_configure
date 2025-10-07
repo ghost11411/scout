@@ -11,7 +11,7 @@ VER=v0.1
 
 # ---------------- Defaults & Paths ----------------
 REPO_URL="https://github.com/ghost11411/scout"
-INSTALL_DIR="/root/scout"
+INSTALL_DIR="${HOME}/scout"
 FORCE=false
 UPDATE=false
 UNINSTALL=false
@@ -51,6 +51,17 @@ OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
+
+# Prompt for confirmation (returns 0 if yes)
+prompt_confirm() {
+	local msg=${1:-"Are you sure?"}
+	local ans
+	read -r -p "$msg [y/N]: " ans
+	case "${ans,,}" in
+		y|yes) return 0 ;;
+		*) return 1 ;;
+	esac
+}
 
 # ---------------- Parse Arguments ----------------
 for arg in "$@"; do
@@ -94,8 +105,13 @@ if [ "$UNINSTALL" = true ]; then
 	  exit 1
 	fi
 
+	if ! prompt_confirm "This will remove '$INSTALL_DIR' and the scout symlink. Proceed?"; then
+		INFO "Uninstall cancelled by user"
+		exit 0
+	fi
+
 	INFO "Removing $INSTALL_DIR..."
-	if rm -rf "$INSTALL_DIR"; then
+	if rm -rf -- "$INSTALL_DIR"; then
 		OK "Removed $INSTALL_DIR"
 	else
 		ERR "Failed to remove $INSTALL_DIR"
@@ -103,9 +119,9 @@ if [ "$UNINSTALL" = true ]; then
 	fi
 
 	if [ -L /usr/local/bin/scout ]; then
-		if rm -f /usr/local/bin/scout 2>/dev/null; then
+		if rm -f -- /usr/local/bin/scout 2>/dev/null; then
 			OK "Removed /usr/local/bin/scout"
-		elif sudo rm -f /usr/local/bin/scout 2>/dev/null; then
+		elif sudo rm -f -- /usr/local/bin/scout 2>/dev/null; then
 			OK "Removed /usr/local/bin/scout (via sudo)"
 		else
 			ERR "Could not remove /usr/local/bin/scout (permission required). Run: sudo rm -f /usr/local/bin/scout"
@@ -127,17 +143,26 @@ fi
 if [ "$FORCE" = true ]; then
 	WARN "--force flag detected..."
 	if [ -d "$INSTALL_DIR" ]; then
+		if ! prompt_confirm "This will remove existing installation at '$INSTALL_DIR'. Proceed?"; then
+			INFO "Force install cancelled by user"
+			exit 0
+		fi
 		INFO "Removing existing installation at $INSTALL_DIR..."
-		rm -rf "$INSTALL_DIR"
-		OK "Removed $INSTALL_DIR"
+		if rm -rf -- "$INSTALL_DIR"; then
+			OK "Removed $INSTALL_DIR"
+		else
+			ERR "Failed to remove $INSTALL_DIR"
+			exit 1
+		fi
 	fi
 
 	INFO "Cloning fresh repository..."
-	git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || {
+	if git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1; then
+		OK "Cloned repository to $INSTALL_DIR"
+	else
 		ERR "Failed to clone repository. Check your network connection."
 		exit 1
-	}
-	OK "Cloned repository to $INSTALL_DIR"
+	fi
 
 elif [ "$UPDATE" = true ]; then
 	WARN "--update flag detected..."
@@ -184,6 +209,7 @@ find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
 INFO "Preparing to run Installer actions..."
 
 # ---------------- Installer functions (merged and deduplicated) ----------------
+# shellcheck disable=SC2317
 RUN_CMD() {
 	local DESC="$1"
 	shift
@@ -258,12 +284,19 @@ INSTALL_PIPX_TOOLS() {
 	fi
 	export PATH="$HOME/.local/bin:$PATH"
 	for T in "${PIPX_TOOLS[@]}"; do
-		if ! pipx list 2>/dev/null | grep -qE "^\s*$T"; then
-			python3 -m pip install --user "$T" >>"$LOG_FILE" 2>&1 && OK "Installed $T via pip (fallback)" || WARN "Failed to install $T via pip"
+		if ! pipx list 2>/dev/null | grep -qE "^\s*${T}"; then
+			if python3 -m pip install --user "$T" >>"$LOG_FILE" 2>&1; then
+				OK "Installed $T via pip (fallback)"
+			else
+				WARN "Failed to install $T via pip"
+			fi
 			# Best-effort: try pipx if available
 			if CHECK_COMMAND pipx; then
-				pipx install "$T" >>"$LOG_FILE" 2>&1 || true
-				OK "Installed $T via pipx"
+				if pipx install "$T" >>"$LOG_FILE" 2>&1; then
+					OK "Installed $T via pipx"
+				else
+					WARN "pipx install failed for $T"
+				fi
 			fi
 		else
 			INFO "$T already installed via pipx"
@@ -307,7 +340,9 @@ INSTALL_MASSCAN() {
 	else
 		ERR "masscan build failed"
 	fi
-	rm -r "$DIR"/* 2>/dev/null || true
+	if [ -n "${DIR:-}" ]; then
+		rm -rf -- "$DIR" 2>/dev/null || true
+	fi
 }
 
 INSTALL_NMAP() {
@@ -317,7 +352,12 @@ INSTALL_NMAP() {
 	fi
 	local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
 	INFO "Installing nmap"
-	curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1 && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
+	if curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1; then
+		chmod +x "$BIN_DIR/nmap" || true
+		OK "nmap"
+	else
+		WARN "Failed to fetch nmap"
+	fi
 }
 
 INSTALL_FINDOMAIN() {
@@ -339,7 +379,9 @@ INSTALL_FINDOMAIN() {
 	else
 		WARN "findomain binary not found"
 	fi
-	rm -r "$TMP"/* 2>/dev/null || true
+	if [ -n "${TMP:-}" ]; then
+		rm -rf -- "$TMP" 2>/dev/null || true
+	fi
 }
 
 CLONE_OR_UPDATE_REPOS() {
@@ -353,14 +395,22 @@ CLONE_OR_UPDATE_REPOS() {
 			WARN "Directory $PATH exists but is not a git repo; skipping $NAME"
 		else
 			INFO "Cloning $NAME into $PATH..."
-			git clone "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1 && OK "$NAME cloned" || WARN "Failed to clone $NAME"
+			if git clone "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1; then
+				OK "$NAME cloned"
+			else
+				WARN "Failed to clone $NAME"
+			fi
 		fi
 	done
 }
 
 UPDATE_NUCLEI_TEMPLATES() {
 	if [ -x "$BIN_DIR/nuclei" ]; then
-		"$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
+		if "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1; then
+			OK "Nuclei templates updated"
+		else
+			WARN "Nuclei template update failed"
+		fi
 	else
 		WARN "nuclei not found; skip templates update"
 	fi
@@ -378,8 +428,12 @@ INSTALL_FINDOMAIN || true
 CLONE_OR_UPDATE_REPOS || true
 UPDATE_NUCLEI_TEMPLATES || true
 
-chmod 755 "$BIN_DIR"/* 2>/dev/null || true
-[ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
+if [ -n "${BIN_DIR:-}" ]; then
+	chmod 755 -- "$BIN_DIR"/* 2>/dev/null || true
+fi
+if [ -f "$INSTALL_DIR/scout" ]; then
+	chmod +x -- "$INSTALL_DIR/scout" || true
+fi
 if [ -w /usr/local/bin ]; then
 	ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created"
 elif sudo -n true 2>/dev/null; then
