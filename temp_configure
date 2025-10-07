@@ -15,6 +15,7 @@ INSTALL_DIR="${HOME}/scout"
 FORCE=false
 UPDATE=false
 UNINSTALL=false
+ASSUME_YES=false
 LOG_FILE="/tmp/scout_temp_configure.log"
 : > "$LOG_FILE"
 
@@ -56,6 +57,10 @@ ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
 prompt_confirm() {
 	local msg=${1:-"Are you sure?"}
 	local ans
+	if [ "${ASSUME_YES:-false}" = true ]; then
+		INFO "Assuming yes to prompt: $msg"
+		return 0
+	fi
 	read -r -p "$msg [y/N]: " ans
 	case "${ans,,}" in
 		y|yes) return 0 ;;
@@ -66,17 +71,19 @@ prompt_confirm() {
 # ---------------- Parse Arguments ----------------
 for arg in "$@"; do
 	case "$arg" in
-		--force) FORCE=true ;;
-		--update) UPDATE=true ;;
-		--uninstall) UNINSTALL=true ;;
-		--help|-h)
+	    --force) FORCE=true ;;
+	    --update) UPDATE=true ;;
+	    --uninstall) UNINSTALL=true ;;
+	    --yes|-y) ASSUME_YES=true ;;
+	    --help|-h)
 			cat <<EOF
-Usage: temp_configure [--force] [--update] [--uninstall]
+Usage: temp_configure [--force] [--update] [--uninstall] [--yes]
 Actions:
-  --force     Remove any existing installation and perform a fresh install
-  --update    Update an existing git installation
-  --uninstall Remove the installation and symlink
-  --help      Show this help
+	--force     Remove any existing installation and perform a fresh install
+	--update    Update an existing git installation
+	--uninstall Remove the installation and symlink
+	--yes, -y   Answer yes to any prompts (non-interactive)
+	--help      Show this help
 EOF
 			exit 0
 			;;
