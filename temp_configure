@@ -16,6 +16,7 @@ FORCE=false
 UPDATE=false
 UNINSTALL=false
 ASSUME_YES=false
+DRY_RUN=false
 LOG_FILE="/tmp/scout_temp_configure.log"
 : > "$LOG_FILE"
 
@@ -74,7 +75,8 @@ for arg in "$@"; do
 	    --force) FORCE=true ;;
 	    --update) UPDATE=true ;;
 	    --uninstall) UNINSTALL=true ;;
-	    --yes|-y) ASSUME_YES=true ;;
+	--yes|-y) ASSUME_YES=true ;;
+	--dry-run) DRY_RUN=true ;;
 	    --help|-h)
 			cat <<EOF
 Usage: temp_configure [--force] [--update] [--uninstall] [--yes]
@@ -83,6 +85,7 @@ Actions:
 	--update    Update an existing git installation
 	--uninstall Remove the installation and symlink
 	--yes, -y   Answer yes to any prompts (non-interactive)
+	--dry-run   Simulate actions without running commands
 	--help      Show this help
 EOF
 			exit 0
@@ -164,8 +167,8 @@ if [ "$FORCE" = true ]; then
 	fi
 
 	INFO "Cloning fresh repository..."
-	if git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1; then
-		OK "Cloned repository to $INSTALL_DIR"
+	if RUN_CMD "git clone $REPO_URL" git clone "$REPO_URL" "$INSTALL_DIR"; then
+		:
 	else
 		ERR "Failed to clone repository. Check your network connection."
 		exit 1
@@ -176,8 +179,8 @@ elif [ "$UPDATE" = true ]; then
 	if [ -d "$INSTALL_DIR/.git" ]; then
 		cd "$INSTALL_DIR" || exit 1
 		INFO "Updating existing repository..."
-		git reset --hard >>"$LOG_FILE" 2>&1 || true
-		git pull --rebase --autostash >>"$LOG_FILE" 2>&1 || true
+	RUN_CMD "git reset --hard" git reset --hard || true
+	RUN_CMD "git pull --rebase" git pull --rebase --autostash || true
 		OK "Updated repository at $INSTALL_DIR"
 	elif [ -d "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR/.git" ] ; then
 		ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
@@ -199,10 +202,12 @@ else
 	fi
 
 	INFO "Cloning repository to '$INSTALL_DIR'..."
-	git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || {
+	if RUN_CMD "git clone $REPO_URL" git clone "$REPO_URL" "$INSTALL_DIR"; then
+		:
+	else
 		ERR "Failed to clone repository. Check your network connection."
 		exit 1
-	}
+	fi
 	OK "Cloned repository to $INSTALL_DIR"
 fi
 
@@ -220,6 +225,10 @@ INFO "Preparing to run Installer actions..."
 RUN_CMD() {
 	local DESC="$1"
 	shift
+	if [ "${DRY_RUN:-false}" = true ]; then
+		INFO "DRY-RUN: would run: $* -- ($DESC)"
+		return 0
+	fi
 	if "$@" >>"$LOG_FILE" 2>&1; then
 		OK "$DESC"
 		return 0
@@ -276,37 +285,52 @@ REPOS=(
 # }
 
 INSTALL_APT_PACKAGES() {
-	INFO "Updating apt cache..."
-	apt update -y >>"$LOG_FILE" 2>&1 || WARN "apt update failed"
-	INFO "Installing apt packages..."
-	apt install -y "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1 || WARN "apt install failed"
-	OK "apt packages installed"
+	INFO "Updating apt cache (non-interactive)..."
+	export DEBIAN_FRONTEND=noninteractive
+	if RUN_CMD "apt update" apt-get update -y -qq; then
+		:
+	else
+		WARN "apt update returned a non-zero exit code; continuing"
+	fi
+
+	INFO "Installing apt packages (may take several minutes)..."
+	if RUN_CMD "apt install packages" apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; then
+		OK "apt packages installed"
+	else
+		WARN "apt install had issues; check $LOG_FILE"
+	fi
 }
 
 INSTALL_PIPX_TOOLS() {
+	# Ensure local bin path is present so pipx/pip --user install locations are usable
+	export PATH="$HOME/.local/bin:$BIN_DIR:$PATH"
+	mkdir -p "$BIN_DIR" 2>/dev/null || true
+
 	if ! CHECK_COMMAND pipx; then
-		INFO "Installing pipx"
-		python3 -m pip install --user pipx >>"$LOG_FILE" 2>&1 || true
-		python3 -m pipx ensurepath >>"$LOG_FILE" 2>&1 || true
+		INFO "Installing pipx (bootstrap via pip)"
+		if RUN_CMD "pip install pipx" python3 -m pip install --user pipx; then
+			RUN_CMD "pipx ensurepath" python3 -m pipx ensurepath || true
+		else
+			WARN "Failed to install pipx via pip; pipx will be unavailable and fallback to pip --user will be used"
+		fi
+	else
+		INFO "pipx already available"
 	fi
-	export PATH="$HOME/.local/bin:$PATH"
+
 	for T in "${PIPX_TOOLS[@]}"; do
-		if ! pipx list 2>/dev/null | grep -qE "^\s*${T}"; then
-			if python3 -m pip install --user "$T" >>"$LOG_FILE" 2>&1; then
-				OK "Installed $T via pip (fallback)"
+		if CHECK_COMMAND pipx; then
+			if pipx list 2>/dev/null | grep -qE "^\s*${T}"; then
+				INFO "$T already installed via pipx"
+				continue
+			fi
+			RUN_CMD "pipx install $T" pipx install "$T" || WARN "pipx install failed for $T"
+		else
+			# fallback to pip --user
+			if RUN_CMD "pip install $T" python3 -m pip install --user "$T"; then
+				:
 			else
 				WARN "Failed to install $T via pip"
 			fi
-			# Best-effort: try pipx if available
-			if CHECK_COMMAND pipx; then
-				if pipx install "$T" >>"$LOG_FILE" 2>&1; then
-					OK "Installed $T via pipx"
-				else
-					WARN "pipx install failed for $T"
-				fi
-			fi
-		else
-			INFO "$T already installed via pipx"
 		fi
 	done
 }
@@ -316,17 +340,19 @@ INSTALL_GO_TOOLS_ONE_BY_ONE() {
 		WARN "Go not found; skipping Go tools"
 		return
 	fi
+	mkdir -p "$BIN_DIR" 2>/dev/null || true
 	export GOBIN="$BIN_DIR"
-	export PATH="$GOBIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+	export GOPATH="${GOPATH:-$HOME/go}"
+	export PATH="$GOBIN:$HOME/.local/bin:$PATH"
 
-	INFO "Installing Go tools..."
+	INFO "Installing Go tools into $GOBIN"
 	for PAIR in "${GO_TOOLS[@]}"; do
 		NAME="${PAIR%%|*}"
 		PKG="${PAIR#*|}"
-		if env GOBIN="$GOBIN" go install "$PKG" >>"$LOG_FILE" 2>&1; then
+		if RUN_CMD "go install $NAME" env GOBIN="$GOBIN" go install "$PKG"; then
 			OK "$NAME"
 		else
-			ERR "$NAME failed"
+			WARN "$NAME failed to install; check $LOG_FILE"
 		fi
 	done
 }
@@ -338,8 +364,12 @@ INSTALL_MASSCAN() {
 	fi
 	local DIR
 	DIR=$(mktemp -d)
-	git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >>"$LOG_FILE" 2>&1 || return 1
-	make -C "$DIR" -j"$(nproc)" >>"$LOG_FILE" 2>&1 || return 1
+	if ! RUN_CMD "git clone masscan" git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR"; then
+		return 1
+	fi
+	if ! RUN_CMD "make masscan" make -C "$DIR" -j"$(nproc)"; then
+		return 1
+	fi
 	if [ -f "$DIR/bin/masscan" ]; then
 		mv "$DIR/bin/masscan" "$BIN_DIR/"
 		chmod +x "$BIN_DIR/masscan"
@@ -359,9 +389,8 @@ INSTALL_NMAP() {
 	fi
 	local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
 	INFO "Installing nmap"
-	if curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1; then
+	if RUN_CMD "fetch nmap" curl -fsSL "$URL" -o "$BIN_DIR/nmap"; then
 		chmod +x "$BIN_DIR/nmap" || true
-		OK "nmap"
 	else
 		WARN "Failed to fetch nmap"
 	fi
@@ -377,8 +406,8 @@ INSTALL_FINDOMAIN() {
 	VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>"$LOG_FILE" | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
 	[ -z "$VER" ] && { WARN "Could not determine findomain latest version"; return; }
 	TMP=$(mktemp -d)
-	curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" >>"$LOG_FILE" 2>&1
-	unzip -o "$TMP/findomain.zip" -d "$TMP" >>"$LOG_FILE" 2>&1 || true
+	RUN_CMD "download findomain" curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" || true
+	RUN_CMD "unzip findomain" unzip -o "$TMP/findomain.zip" -d "$TMP" || true
 	if [ -f "$TMP/findomain" ]; then
 		mv "$TMP/findomain" "$BIN_DIR/findomain"
 		chmod +x "$BIN_DIR/findomain"
@@ -396,14 +425,14 @@ CLONE_OR_UPDATE_REPOS() {
 		IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
 		if [ -d "$PATH/.git" ]; then
 			INFO "Updating $NAME..."
-			git -C "$PATH" pull --rebase --autostash >>"$LOG_FILE" 2>&1 || true
+			RUN_CMD "git pull $NAME" git -C "$PATH" pull --rebase --autostash || true
 			OK "$NAME updated"
 		elif [ -d "$PATH" ]; then
 			WARN "Directory $PATH exists but is not a git repo; skipping $NAME"
 		else
 			INFO "Cloning $NAME into $PATH..."
-			if git clone "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1; then
-				OK "$NAME cloned"
+			if RUN_CMD "git clone $NAME" git clone "$GITURL" "$PATH"; then
+				:
 			else
 				WARN "Failed to clone $NAME"
 			fi
@@ -413,7 +442,7 @@ CLONE_OR_UPDATE_REPOS() {
 
 UPDATE_NUCLEI_TEMPLATES() {
 	if [ -x "$BIN_DIR/nuclei" ]; then
-		if "$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1; then
+		if RUN_CMD "nuclei -ut" "$BIN_DIR/nuclei" -ut; then
 			OK "Nuclei templates updated"
 		else
 			WARN "Nuclei template update failed"
@@ -452,6 +481,13 @@ fi
 OK "Install finished"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
+
+if [ -s "$LOG_FILE" ]; then
+	echo
+	echo "Last 40 lines from installer log ($LOG_FILE):"
+	tail -n 40 "$LOG_FILE" || true
+fi
+
 OK "Happy Recon! 🔎"
 exit 0
 
