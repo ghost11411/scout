@@ -2,18 +2,75 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# ---------------- Colors ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m";
-VER=v0.1
-
-# ---------------- Variables ----------------
+# ---------------- VARIABLES ----------------
+VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
-INSTALL_DIR="/root/scout"
+INSTALL_DIR="${HOME}/scout"
 FORCE=false
 UPDATE=false
-LOG_FILE="/tmp/scout_configure.log"
-touch "$LOG_FILE"
+UNINSTALL=false
+TYPE="default"
+LOG_FILE="/tmp/scout_temp_configure.log"
 : > "$LOG_FILE"
+
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+
+APT_PACKAGES=(
+    coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
+)
+
+GO_TOOLS=(
+    "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+    "amass|github.com/owasp-amass/amass/v4/...@master"
+    "assetfinder|github.com/tomnomnom/assetfinder@latest"
+    "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+    "waybackurls|github.com/tomnomnom/waybackurls@latest"
+    "gau|github.com/lc/gau/v2/cmd/gau@latest"
+    "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+    "gf|github.com/tomnomnom/gf@latest"
+    "unfurl|github.com/tomnomnom/unfurl@latest"
+    "httprobe|github.com/tomnomnom/httprobe@latest"
+    "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+    "ffuf|github.com/ffuf/ffuf/v2@latest"
+    "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+    "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+    "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
+)
+
+# ---------------- COLORS ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
+
+# ---------------- LOGGING ----------------
+OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
+
+RUN_CMD() {
+    local DESC="$1"; shift
+    if "$@" >>"$LOG_FILE" 2>&1; then
+        OK "$DESC"
+    else
+        ERR "$DESC failed. Check $LOG_FILE"
+    fi
+}
+
+# ---------------- START TIMER ----------------
+START_TIME=$(date +%s)
+
+# ---------------- CLEANUP + CTRL+C HANDLER ----------------
+cleanup() {
+    END_TIME=$(date +%s)
+    ELAPSED=$((END_TIME - START_TIME))
+    echo -e "\n${YELLOW}[*] Script interrupted. Cleaning up...${RESET}"
+    echo -e "${BLUE}Total time before exit:${RESET} $(printf '%02d:%02d:%02d\n' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
+    echo -e "${RED}Exiting safely.${RESET}"
+    exit 1
+}
+trap cleanup INT
 
 # ---------------- ASCII BANNER ----------------
 BANNER(){
@@ -32,127 +89,144 @@ EOF
   TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
 
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
-  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
+      sleep 0.0008
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    sleep 0.002
+  done
+  printf "\n\n"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
-# ---------------- Messages ----------------
-OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
-INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
-WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
-
-# ---------------- Parse Arguments ----------------
-for arg in "$@"; do
-    case "$arg" in
+# ---------------- PARSE FLAGS ----------------
+for ARG in "$@"; do
+    case "$ARG" in
         --force) FORCE=true ;;
         --update) UPDATE=true ;;
-        *)
-            ERR "Unknown option: $arg"
-            echo "Usage: configure [--force | --update]"
-            exit 1
+        --uninstall) UNINSTALL=true ;;
+        --help|-h)
+            cat <<EOF
+Usage: configure [--force] [--update] [--uninstall]
+Actions:
+    --force     Remove existing installation and fresh install
+    --update    Update existing git installation
+    --uninstall Remove installation and symlink
+EOF
+            exit 0
             ;;
+        *)
+            ERR "Unknown option: $ARG"
+            echo "Usage: configure [--force|--update|--uninstall]"
+            exit 1 ;;
     esac
 done
 
-# ---------------- Start Installation ----------------
+# ---------------- FLAG VALIDATION ----------------
+FLAG_COUNT=0
+$FORCE && FLAG_COUNT=$((FLAG_COUNT+1))
+$UPDATE && FLAG_COUNT=$((FLAG_COUNT+1))
+$UNINSTALL && FLAG_COUNT=$((FLAG_COUNT+1))
+if [ "$FLAG_COUNT" -gt 1 ]; then
+    WARN "Multiple flags used. Only one should be used."
+    exit 1
+fi
+
+# ---------------- START ----------------
 BANNER
-INFO "Starting Scout installation..."
 
 # ---------------- CHECK ROOT ----------------
 if [ "$EUID" -ne 0 ]; then
-  ERR "Please run as root (sudo ./configure)"
-  exit 1
+    ERR "Please run as root (sudo ./configure)"
+    exit 1
 fi
 
-# ---------------- Handle Flags ----------------
-if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then
-    ERR "--force and --update cannot be used together."
-    exit 1
+# ---------------- MODE SUMMARY ----------------
+echo -e "${BOLD}${CYAN}MODE SUMMARY:"
+echo "────────────────────────────"
+echo "FORCE: $FORCE"
+echo "UPDATE: $UPDATE"
+echo "UNINSTALL: $UNINSTALL"
+echo "Running as user: $(whoami)"
+echo -e "────────────────────────────${RESET}"
 
-elif [ "$FORCE" = true ]; then
-    WARN "--force flag detected..."
+# ---------------- NO FLAGS DEFAULT INSTALL ----------------
+if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; then
     if [ -d "$INSTALL_DIR" ]; then
-        INFO "Removing existing installation at $INSTALL_DIR..."
-        rm -rf "$INSTALL_DIR"
-        OK "Removed $INSTALL_DIR"
+        INFO "Existing installation detected at $INSTALL_DIR"
+        INFO "Use --force to reinstall or --update to update"
+        exit 0
     fi
+    INFO "Performing Default Install..."
+    RUN_CMD "Clone repository to $INSTALL_DIR" git clone "$REPO_URL" "$INSTALL_DIR"
+fi
 
-    INFO "Cloning fresh repository..."
-    git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
-        ERR "Failed to clone repository. Check your network connection."
-        exit 1
-    }
-    OK "Cloned repository to $INSTALL_DIR"
+# ---------------- UNINSTALL ----------------
+if [ "$UNINSTALL" = true ]; then
+    INFO "Running Uninstaller..."
+    [ -d "$INSTALL_DIR" ] && RUN_CMD "Remove install dir" rm -rf -- "$INSTALL_DIR"
+    [ -L /usr/local/bin/scout ] && RUN_CMD "Remove symlink" rm -f -- /usr/local/bin/scout
+    OK "Scout uninstalled."
+    exit 0
+fi
 
+# ---------------- FORCE / UPDATE ----------------
+if [ "$FORCE" = true ]; then
+    WARN "--force flag detected"
+    RUN_CMD "Remove existing install" rm -rf -- "$INSTALL_DIR"
+    RUN_CMD "Clone repository to $INSTALL_DIR" git clone "$REPO_URL" "$INSTALL_DIR"
 elif [ "$UPDATE" = true ]; then
-    WARN "--update flag detected..."
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        cd "$INSTALL_DIR" || exit 1
-        INFO "Updating existing repository..."
-        git reset --hard >/dev/null 2>&1
-        git pull --rebase --autostash >/dev/null 2>&1
-        OK "Updated repository at $INSTALL_DIR"
-    elif [ -d "$INSTALL_DIR" ]; then
-        ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
-        exit 1
-    else
-        ERR "No existing installation found. Use --force to perform a fresh install."
-        exit 1
-    fi
-
-else
-    WARN "No flags detected, proceeding with default behavior..."
-    if [ -d "$INSTALL_DIR" ]; then
-        if [ -d "$INSTALL_DIR/.git" ]; then
-            ERR "Installation directory $INSTALL_DIR already exists. Use --update to update or --force to reinstall."
-        else
-            ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
-        fi
-        exit 1
-    fi
-
-    INFO "Cloning repository to '$INSTALL_DIR'..."
-    git clone "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
-        ERR "Failed to clone repository. Check your network connection."
-        exit 1
-    }
-    OK "Cloned repository to $INSTALL_DIR"
+    WARN "--update flag detected"
+    [ -d "$INSTALL_DIR/.git" ] && cd "$INSTALL_DIR" && RUN_CMD "Updating..." git reset --hard && git pull --rebase --autostash
 fi
 
+# ---------------- PREPARE DIRECTORIES ----------------
+mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
+find "$INSTALL_DIR" -type f -exec chmod +x {} \; || true
 
-# ---------------- Permissions ----------------
-INFO "Setting executable permissions for scripts..."
-find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
-    ERR "Failed to set permissions. Check your permissions."
-    exit 1
-}
+# ---------------- INSTALL APT PACKAGES ----------------
+INFO "Installing apt packages..."
+apt-get update -y -qq || WARN "apt update failed. Check network"
+apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" || ERR "apt install failed. Check network"
+OK "APT packages installed"
 
-# ---------------- Locate Installer ----------------
-INFO "Searching for installer script..."
-INSTALLER_PATH=$(find "$INSTALL_DIR" -type f -name "installer" | head -n 1 || true)
-INFO "Installer script found at: $INSTALLER_PATH"
-
-if [ -z "$INSTALLER_PATH" ]; then
-    ERR "Installer script not found in repository."
-    exit 1
+# ---------------- INSTALL GO TOOLS ----------------
+if command -v go >/dev/null 2>&1; then
+    INFO "Go version: $(go version)"
+    mkdir -p "$BIN_DIR"
+    export GOBIN="$BIN_DIR"
+    export PATH="$GOBIN:$PATH"
+    for PAIR in "${GO_TOOLS[@]}"; do
+        NAME="${PAIR%%|*}"
+        PKG="${PAIR#*|}"
+        RUN_CMD "$NAME" go install "$PKG"
+    done
 fi
+OK "Go tools installed"
 
-# ---------------- Run Installer ----------------
-if [ -x "$INSTALLER_PATH" ]; then
-    INFO "Running installer script..."
-    "$INSTALLER_PATH" || {
-        ERR "Installer script failed. Check the logs above."
-        exit 1
-    }
-else
-    ERR "Installer script is not executable."
-    exit 1
-fi
+# ---------------- CLONE OR UPDATE REPOS ----------------
+[ ! -d "$GF_DIR" ] && RUN_CMD "Cloning GF-Patterns..." git clone https://github.com/1ndianl33t/GF-Patterns.git "$GF_DIR" || ERR "Failed to clone GF-Patterns"
+[ ! -d "$BIN_DIR/Sublist3r" ] && RUN_CMD "Cloning Sublist3r..." git clone https://github.com/aboul3la/Sublist3r.git "$BIN_DIR/sublist3r" || ERR "Failed to clone Sublist3r"
+
+# ---------------- SYMLINK ----------------
+chmod 755 "$BIN_DIR"/* 2>/dev/null || true
+[ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
+[ ! -f /usr/local/bin/scout ] && ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created"
+
+# ---------------- SHOW TOTAL TIME ----------------
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+INFO "Script completed in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
 
 # ---------------- Summary ----------------
 OK "Scout installation completed successfully!"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
-OK "Happy Recon! 🔎"
+echo -e "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
+exit 0
