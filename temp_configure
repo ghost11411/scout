@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# Unified configure/installer/uninstaller for Scout
+# Combines functionality from: configure, modules/installer, modules/uninstaller
+
+# ---------------- Colors ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m";
+VER=v0.1
+
+# ---------------- Defaults & Paths ----------------
+REPO_URL="https://github.com/ghost11411/scout"
+INSTALL_DIR="/root/scout"
+FORCE=false
+UPDATE=false
+UNINSTALL=false
+LOG_FILE="/tmp/scout_temp_configure.log"
+: > "$LOG_FILE"
+
+# Installer-specific paths (will be used when running install actions)
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${INSTALL_DIR}/wordlists"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+mkdir -p "$BIN_DIR" "$GF_DIR" "$WORDLISTS_DIR" 2>/dev/null || true
+
+# ---------------- Banner & Messages ----------------
+BANNER(){
+  ASCII_SCOUT=$(cat <<'EOF'
+	/$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  \ $$| $$  | $$   | $$   
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
+   \______/  \______/  \______/  \______/    |__/   
+EOF
+  )
+  local tag="${VER:-v?}"
+  TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
+
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
+  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+}
+
+OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
+
+# ---------------- Parse Arguments ----------------
+for arg in "$@"; do
+	case "$arg" in
+		--force) FORCE=true ;;
+		--update) UPDATE=true ;;
+		--uninstall) UNINSTALL=true ;;
+		--help|-h)
+			cat <<EOF
+Usage: temp_configure [--force] [--update] [--uninstall]
+Actions:
+  --force     Remove any existing installation and perform a fresh install
+  --update    Update an existing git installation
+  --uninstall Remove the installation and symlink
+  --help      Show this help
+EOF
+			exit 0
+			;;
+		*)
+			ERR "Unknown option: $arg"
+			echo "Usage: temp_configure [--force | --update | --uninstall]"
+			exit 1
+			;;
+	esac
+done
+
+# ---------------- Start ----------------
+BANNER
+INFO "Starting Scout configure script..."
+
+# ---------------- CHECK ROOT ----------------
+if [ "$EUID" -ne 0 ]; then
+  ERR "Please run as root (sudo ./temp_configure)"
+  exit 1
+fi
+
+if [ "$UNINSTALL" = true ]; then
+	INFO "Running uninstaller flow..."
+	if [ ! -d "$INSTALL_DIR" ]; then
+	  ERR "Scout is not installed in $INSTALL_DIR"
+	  exit 1
+	fi
+
+	INFO "Removing $INSTALL_DIR..."
+	if rm -rf "$INSTALL_DIR"; then
+		OK "Removed $INSTALL_DIR"
+	else
+		ERR "Failed to remove $INSTALL_DIR"
+		exit 1
+	fi
+
+	if [ -L /usr/local/bin/scout ]; then
+		if rm -f /usr/local/bin/scout 2>/dev/null; then
+			OK "Removed /usr/local/bin/scout"
+		elif sudo rm -f /usr/local/bin/scout 2>/dev/null; then
+			OK "Removed /usr/local/bin/scout (via sudo)"
+		else
+			ERR "Could not remove /usr/local/bin/scout (permission required). Run: sudo rm -f /usr/local/bin/scout"
+		fi
+	else
+		OK "No symlink /usr/local/bin/scout found"
+	fi
+
+	OK "Scout uninstalled. Folder removed: '$INSTALL_DIR'"
+	exit 0
+fi
+
+# ---------------- Handle Flags & Git clone/update ----------------
+if [ "$FORCE" = true ] && [ "$UPDATE" = true ]; then
+	ERR "--force and --update cannot be used together."
+	exit 1
+fi
+
+if [ "$FORCE" = true ]; then
+	WARN "--force flag detected..."
+	if [ -d "$INSTALL_DIR" ]; then
+		INFO "Removing existing installation at $INSTALL_DIR..."
+		rm -rf "$INSTALL_DIR"
+		OK "Removed $INSTALL_DIR"
+	fi
+
+	INFO "Cloning fresh repository..."
+	git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || {
+		ERR "Failed to clone repository. Check your network connection."
+		exit 1
+	}
+	OK "Cloned repository to $INSTALL_DIR"
+
+elif [ "$UPDATE" = true ]; then
+	WARN "--update flag detected..."
+	if [ -d "$INSTALL_DIR/.git" ]; then
+		cd "$INSTALL_DIR" || exit 1
+		INFO "Updating existing repository..."
+		git reset --hard >>"$LOG_FILE" 2>&1 || true
+		git pull --rebase --autostash >>"$LOG_FILE" 2>&1 || true
+		OK "Updated repository at $INSTALL_DIR"
+	elif [ -d "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR/.git" ] ; then
+		ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
+		exit 1
+	else
+		ERR "No existing installation found. Use --force to perform a fresh install."
+		exit 1
+	fi
+
+else
+	WARN "No flags detected, proceeding with default behavior..."
+	if [ -d "$INSTALL_DIR" ]; then
+		if [ -d "$INSTALL_DIR/.git" ]; then
+			ERR "Installation directory $INSTALL_DIR already exists. Use --update to update or --force to reinstall."
+		else
+			ERR "Directory $INSTALL_DIR exists but is not a Git repository. Use --force to reinstall."
+		fi
+		exit 1
+	fi
+
+	INFO "Cloning repository to '$INSTALL_DIR'..."
+	git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 || {
+		ERR "Failed to clone repository. Check your network connection."
+		exit 1
+	}
+	OK "Cloned repository to $INSTALL_DIR"
+fi
+
+# ---------------- Shared permissions & installer execution ----------------
+INFO "Setting executable permissions for scripts..."
+find "$INSTALL_DIR" -type f -exec chmod +x {} \; || {
+	ERR "Failed to set permissions. Check your permissions."
+	exit 1
+}
+
+INFO "Preparing to run Installer actions..."
+
+# ---------------- Installer functions (merged and deduplicated) ----------------
+RUN_CMD() {
+	local DESC="$1"
+	shift
+	if "$@" >>"$LOG_FILE" 2>&1; then
+		OK "$DESC"
+		return 0
+	else
+		ERR "$DESC failed. Check $LOG_FILE"
+		return 1
+	fi
+}
+
+CHECK_COMMAND() { command -v "$1" >/dev/null 2>&1; }
+
+GO_TOOLS=(
+	"mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+	"amass|github.com/owasp-amass/amass/v4/...@master"
+	"assetfinder|github.com/tomnomnom/assetfinder@latest"
+	"subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+	"waybackurls|github.com/tomnomnom/waybackurls@latest"
+	"gau|github.com/lc/gau/v2/cmd/gau@latest"
+	"dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+	"gf|github.com/tomnomnom/gf@latest"
+	"unfurl|github.com/tomnomnom/unfurl@latest"
+	"httprobe|github.com/tomnomnom/httprobe@latest"
+	"httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+	"ffuf|github.com/ffuf/ffuf/v2@latest"
+	"nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+	"naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+	"notify|github.com/projectdiscovery/notify/cmd/notify@latest"
+)
+
+APT_PACKAGES=(
+	coreutils git whois jq unzip python3 python3-pip python3-requests python3-dnspython pipx parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
+)
+
+PIPX_TOOLS=("arjun")
+
+REPOS=(
+	"GF-Patterns|$GF_DIR|https://github.com/1ndianl33t/GF-Patterns.git"
+	"Sublist3r|$TOOLS_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"
+)
+
+# ENSURE_BASIC_COMMANDS() {
+# 	local OKAY=0
+# 	local MISSING=()
+# 	for CMD in git curl jq tar unzip go bash; do
+# 		if ! CHECK_COMMAND "$CMD"; then
+# 			MISSING+=("$CMD")
+# 			OKAY=1
+# 		fi
+# 	done
+# 	if [ ${#MISSING[@]} -ne 0 ]; then
+# 		WARN "Missing basic commands: ${MISSING[*]}"
+# 	fi
+# 	[ "$OKAY" -eq 0 ]
+# }
+
+INSTALL_APT_PACKAGES() {
+	INFO "Updating apt cache..."
+	apt update -y >>"$LOG_FILE" 2>&1 || WARN "apt update failed"
+	INFO "Installing apt packages..."
+	apt install -y "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1 || WARN "apt install failed"
+	OK "apt packages installed"
+}
+
+INSTALL_PIPX_TOOLS() {
+	if ! CHECK_COMMAND pipx; then
+		INFO "Installing pipx"
+		python3 -m pip install --user pipx >>"$LOG_FILE" 2>&1 || true
+		python3 -m pipx ensurepath >>"$LOG_FILE" 2>&1 || true
+	fi
+	export PATH="$HOME/.local/bin:$PATH"
+	for T in "${PIPX_TOOLS[@]}"; do
+		if ! pipx list 2>/dev/null | grep -qE "^\s*$T"; then
+			python3 -m pip install --user "$T" >>"$LOG_FILE" 2>&1 && OK "Installed $T via pip (fallback)" || WARN "Failed to install $T via pip"
+			# Best-effort: try pipx if available
+			if CHECK_COMMAND pipx; then
+				pipx install "$T" >>"$LOG_FILE" 2>&1 || true
+				OK "Installed $T via pipx"
+			fi
+		else
+			INFO "$T already installed via pipx"
+		fi
+	done
+}
+
+INSTALL_GO_TOOLS_ONE_BY_ONE() {
+	if ! CHECK_COMMAND go; then
+		WARN "Go not found; skipping Go tools"
+		return
+	fi
+	export GOBIN="$BIN_DIR"
+	export PATH="$GOBIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+	INFO "Installing Go tools..."
+	for PAIR in "${GO_TOOLS[@]}"; do
+		NAME="${PAIR%%|*}"
+		PKG="${PAIR#*|}"
+		if env GOBIN="$GOBIN" go install "$PKG" >>"$LOG_FILE" 2>&1; then
+			OK "$NAME"
+		else
+			ERR "$NAME failed"
+		fi
+	done
+}
+
+INSTALL_MASSCAN() {
+	if [ -x "$BIN_DIR/masscan" ]; then
+		INFO "masscan already present"
+		return
+	fi
+	local DIR
+	DIR=$(mktemp -d)
+	git clone --depth 1 https://github.com/robertdavidgraham/masscan.git "$DIR" >>"$LOG_FILE" 2>&1 || return 1
+	make -C "$DIR" -j"$(nproc)" >>"$LOG_FILE" 2>&1 || return 1
+	if [ -f "$DIR/bin/masscan" ]; then
+		mv "$DIR/bin/masscan" "$BIN_DIR/"
+		chmod +x "$BIN_DIR/masscan"
+		OK "masscan"
+	else
+		ERR "masscan build failed"
+	fi
+	rm -r "$DIR"/* 2>/dev/null || true
+}
+
+INSTALL_NMAP() {
+	if [ -x "$BIN_DIR/nmap" ]; then
+		INFO "nmap already installed"
+		return
+	fi
+	local URL="https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap"
+	INFO "Installing nmap"
+	curl -fsSL "$URL" -o "$BIN_DIR/nmap" >>"$LOG_FILE" 2>&1 && chmod +x "$BIN_DIR/nmap" && OK "nmap" || WARN "Failed to fetch nmap"
+}
+
+INSTALL_FINDOMAIN() {
+	if [ -x "$BIN_DIR/findomain" ]; then
+		INFO "findomain already installed"
+		return
+	fi
+	INFO "Installing findomain"
+	local VER TMP
+	VER=$(curl -fsSL https://github.com/Findomain/Findomain/releases/latest 2>>"$LOG_FILE" | grep -Eo 'tag/[0-9A-Za-z._-]+' | head -n1 | cut -d'/' -f2 || true)
+	[ -z "$VER" ] && { WARN "Could not determine findomain latest version"; return; }
+	TMP=$(mktemp -d)
+	curl -fsSL -L "https://github.com/Findomain/Findomain/releases/download/$VER/findomain-linux.zip" -o "$TMP/findomain.zip" >>"$LOG_FILE" 2>&1
+	unzip -o "$TMP/findomain.zip" -d "$TMP" >>"$LOG_FILE" 2>&1 || true
+	if [ -f "$TMP/findomain" ]; then
+		mv "$TMP/findomain" "$BIN_DIR/findomain"
+		chmod +x "$BIN_DIR/findomain"
+		OK "findomain"
+	else
+		WARN "findomain binary not found"
+	fi
+	rm -r "$TMP"/* 2>/dev/null || true
+}
+
+CLONE_OR_UPDATE_REPOS() {
+	for ENTRY in "${REPOS[@]}"; do
+		IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
+		if [ -d "$PATH/.git" ]; then
+			INFO "Updating $NAME..."
+			git -C "$PATH" pull --rebase --autostash >>"$LOG_FILE" 2>&1 || true
+			OK "$NAME updated"
+		elif [ -d "$PATH" ]; then
+			WARN "Directory $PATH exists but is not a git repo; skipping $NAME"
+		else
+			INFO "Cloning $NAME into $PATH..."
+			git clone "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1 && OK "$NAME cloned" || WARN "Failed to clone $NAME"
+		fi
+	done
+}
+
+UPDATE_NUCLEI_TEMPLATES() {
+	if [ -x "$BIN_DIR/nuclei" ]; then
+		"$BIN_DIR/nuclei" -ut >>"$LOG_FILE" 2>&1 && OK "Nuclei templates updated" || WARN "Nuclei template update failed"
+	else
+		WARN "nuclei not found; skip templates update"
+	fi
+}
+
+# ---------------- Run installer sequence ----------------
+INFO "Starting full install sequence"
+INSTALL_APT_PACKAGES || true
+# ENSURE_BASIC_COMMANDS || true
+INSTALL_PIPX_TOOLS || true
+INSTALL_GO_TOOLS_ONE_BY_ONE || true
+INSTALL_MASSCAN || true
+INSTALL_NMAP || true
+INSTALL_FINDOMAIN || true
+CLONE_OR_UPDATE_REPOS || true
+UPDATE_NUCLEI_TEMPLATES || true
+
+chmod 755 "$BIN_DIR"/* 2>/dev/null || true
+[ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
+if [ -w /usr/local/bin ]; then
+	ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created"
+elif sudo -n true 2>/dev/null; then
+	sudo ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created (sudo)"
+else
+	WARN "Could not symlink; run manually: sudo ln -sf $INSTALL_DIR/scout /usr/local/bin/scout"
+fi
+
+OK "Install finished"
+echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
+echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
+OK "Happy Recon! 🔎"
+exit 0
+
