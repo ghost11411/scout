@@ -44,7 +44,7 @@ GO_TOOLS=(
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- LOGGING ----------------
-OK()      { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
+OK()      { printf "${GREEN}✅ %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
@@ -58,19 +58,36 @@ RUN_CMD() {
     fi
 }
 
+# ---------------- SPINNER ----------------
+spinner() {
+    local pid=$1
+    local message=$2
+    local delay=0.1
+    local i=0
+    local BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+
+    tput civis  # hide cursor
+    printf "${BLUE}⚙️  %s " "$message"
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r${BLUE}${BRAILLE_STYLE_SPINNER_CHARS[$i]}${RESET} %s" "$message"
+        i=$(( (i+1) % ${#BRAILLE_STYLE_SPINNER_CHARS[@]} ))
+        sleep $delay
+    done
+    wait "$pid" 2>/dev/null
+    local status=$?
+
+    # Ensure spinner line is fully cleared before returning
+    printf "\r\033[K"
+    tput cnorm  # restore cursor
+    return $status
+}
+
+
+# ---------------- CTRL+C HANDLER ----------------
+trap 'tput cnorm; echo -e "\n${RED}[✘] Installation interrupted by user.${RESET}"; exit 1' INT
+
 # ---------------- START TIMER ----------------
 START_TIME=$(date +%s)
-
-# ---------------- CLEANUP + CTRL+C HANDLER ----------------
-cleanup() {
-    END_TIME=$(date +%s)
-    ELAPSED=$((END_TIME - START_TIME))
-    echo -e "\n${YELLOW}[*] Script interrupted. Cleaning up...${RESET}"
-    echo -e "${BLUE}Total time before exit:${RESET} $(printf '%02d:%02d:%02d\n' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
-    echo -e "${RED}Exiting safely.${RESET}"
-    exit 1
-}
-trap cleanup INT
 
 # ---------------- ASCII BANNER ----------------
 BANNER(){
@@ -85,23 +102,10 @@ BANNER(){
    \______/  \______/  \______/  \______/    |__/   
 EOF
   )
-  local tag="${VER:-v?}"
-  TAGLINE="Recon Made Easy                  Made By Ghost ${tag}"
-
+  TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${BLUE}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0008
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.002
-  done
-  printf "\n\n"
+  echo -e "${HIGH_GREEN}${BOLD}${ASCII_SCOUT}${RESET}"
+  echo -e "${CYAN}${BOLD}${TAGLINE}${RESET}"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
@@ -119,8 +123,7 @@ Actions:
     --update    Update existing git installation
     --uninstall Remove installation and symlink
 EOF
-            exit 0
-            ;;
+            exit 0 ;;
         *)
             ERR "Unknown option: $ARG"
             echo "Usage: configure [--force|--update|--uninstall]"
@@ -159,12 +162,22 @@ echo -e "───────────────────────�
 # ---------------- NO FLAGS DEFAULT INSTALL ----------------
 if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; then
     if [ -d "$INSTALL_DIR" ]; then
-        INFO "Existing installation detected at $INSTALL_DIR"
-        INFO "Use --force to reinstall or --update to update"
-        exit 0
+        echo -e "${YELLOW}Installation directory already exists:${RESET} ${BLUE}${INSTALL_DIR}${RESET}"
+        echo -e "${BLUE}Choose an option:"
+        echo "  1) Update existing installation"
+        echo "  2) Force reinstall (remove & fresh install)"
+        echo -e "  3) Exit${RESET}"
+        read -rp "Enter choice [1-3]: " CHOICE
+        case "$CHOICE" in
+            1) UPDATE=true ;;
+            2) FORCE=true ;;
+            3) INFO "Exiting..."; exit 0 ;;
+            *) WARN "Invalid choice. Exiting."; exit 1 ;;
+        esac
+    else
+        INFO "Performing default install..."
+        FORCE=true
     fi
-    INFO "Performing Default Install..."
-    RUN_CMD "Clone repository to $INSTALL_DIR" git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
 # ---------------- UNINSTALL ----------------
@@ -180,10 +193,13 @@ fi
 if [ "$FORCE" = true ]; then
     WARN "--force flag detected"
     RUN_CMD "Remove existing install" rm -rf -- "$INSTALL_DIR"
-    RUN_CMD "Clone repository to $INSTALL_DIR" git clone "$REPO_URL" "$INSTALL_DIR"
+    (git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning repository"
+    OK "Repository cloned to $INSTALL_DIR"
 elif [ "$UPDATE" = true ]; then
     WARN "--update flag detected"
-    [ -d "$INSTALL_DIR/.git" ] && cd "$INSTALL_DIR" && RUN_CMD "Updating..." git reset --hard && git pull --rebase --autostash
+    [ -d "$INSTALL_DIR/.git" ] && cd "$INSTALL_DIR" && \
+    (git reset --hard >>"$LOG_FILE" 2>&1 && git pull --rebase --autostash >>"$LOG_FILE" 2>&1) & spinner $! "Updating repository"
+    OK "Repository updated at $INSTALL_DIR"
 fi
 
 # ---------------- PREPARE DIRECTORIES ----------------
@@ -191,9 +207,10 @@ mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
 find "$INSTALL_DIR" -type f -exec chmod +x {} \; || true
 
 # ---------------- INSTALL APT PACKAGES ----------------
-INFO "Installing apt packages..."
-apt-get update -y -qq || WARN "apt update failed. Check network"
-apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" || ERR "apt install failed. Check network"
+(apt-get update -y -qq >>"$LOG_FILE" 2>&1) & spinner $! "Updating APT repositories..."
+OK "APT repositories updated"
+
+(apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" >>"$LOG_FILE" 2>&1) & spinner $! "Installing APT packages..."
 OK "APT packages installed"
 
 # ---------------- INSTALL GO TOOLS ----------------
@@ -205,28 +222,33 @@ if command -v go >/dev/null 2>&1; then
     for PAIR in "${GO_TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
-        RUN_CMD "$NAME" go install "$PKG"
+        (go install "$PKG" >>"$LOG_FILE" 2>&1) & spinner $! "Installing Go tool: $NAME"
+        OK "Installed $NAME"
     done
 fi
-OK "Go tools installed"
+INFO "Go tools installed"
 
-# ---------------- CLONE OR UPDATE REPOS ----------------
-[ ! -d "$GF_DIR" ] && RUN_CMD "Cloning GF-Patterns..." git clone https://github.com/1ndianl33t/GF-Patterns.git "$GF_DIR" || ERR "Failed to clone GF-Patterns"
-[ ! -d "$BIN_DIR/Sublist3r" ] && RUN_CMD "Cloning Sublist3r..." git clone https://github.com/aboul3la/Sublist3r.git "$BIN_DIR/sublist3r" || ERR "Failed to clone Sublist3r"
+# ---------------- CLONE REPOS ----------------
+(git clone --depth 1 https://github.com/1ndianl33t/GF-Patterns.git "$GF_DIR" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning GF-Patterns..."
+OK "GF-Patterns cloned"
+
+(git clone --depth 1 https://github.com/aboul3la/Sublist3r.git "$BIN_DIR/Sublist3r" >>"$LOG_FILE" 2>&1) & spinner $! "Cloning Sublist3r..."
+OK "Sublist3r cloned"
 
 # ---------------- SYMLINK ----------------
 chmod 755 "$BIN_DIR"/* 2>/dev/null || true
 [ -f "$INSTALL_DIR/scout" ] && chmod +x "$INSTALL_DIR/scout" || true
-[ ! -f /usr/local/bin/scout ] && ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout && OK "Symlink created"
+ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+OK "Symlink created"
 
 # ---------------- SHOW TOTAL TIME ----------------
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 INFO "Script completed in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
 
-# ---------------- Summary ----------------
+# ---------------- SUMMARY ----------------
 OK "Scout installation completed successfully!"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
-echo -e "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
+echo -e  "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
 exit 0
