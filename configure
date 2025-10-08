@@ -152,7 +152,7 @@ echo -e "───────────────────────�
 
 # ---------------- NO FLAGS DEFAULT INSTALL ----------------
 if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; then
-    INFO "No flags provided. Proceeding with default installation."
+    WARN "No flags provided. Proceeding with default installation."
     if [ -d "$INSTALL_DIR" ]; then
         ERR "$INSTALL_DIR already exists. Use --force to reinstall or --update to update."
         exit 1
@@ -204,7 +204,7 @@ OK "APT packages installed"
 
 # ---------------- INSTALL GO TOOLS ----------------
 if command -v go >/dev/null 2>&1; then
-    INFO "Go version: $(go version)"
+    INFO "Go version: $(go version | cut -d " " -f 3)"
     mkdir -p "$BIN_DIR"
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:$PATH"
