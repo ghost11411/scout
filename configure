@@ -152,22 +152,13 @@ echo -e "───────────────────────�
 
 # ---------------- NO FLAGS DEFAULT INSTALL ----------------
 if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; then
+    INFO "No flags provided. Proceeding with default installation."
     if [ -d "$INSTALL_DIR" ]; then
-        echo -e "${YELLOW}Installation directory already exists:${RESET} ${BLUE}${INSTALL_DIR}${RESET}"
-        echo -e "${BLUE}Choose an option:"
-        echo "  1) Update existing installation"
-        echo "  2) Force reinstall (remove & fresh install)"
-        echo -e "  3) Exit${RESET}"
-        read -rp "Enter choice [1-3]: " CHOICE
-        case "$CHOICE" in
-            1) UPDATE=true ;;
-            2) FORCE=true ;;
-            3) INFO "Exiting..."; exit 0 ;;
-            *) WARN "Invalid choice. Exiting."; exit 1 ;;
-        esac
+        ERR "$INSTALL_DIR already exists. Use --force to reinstall or --update to update."
+        exit 1
     else
-        INFO "Performing default install..."
-        FORCE=false
+        INFO "Cloning repository..."
+        git clone "$REPO_URL" "$INSTALL_DIR" >>"$LOG_FILE" 2>&1 && OK "Repository cloned to $INSTALL_DIR"
     fi
 fi
 
