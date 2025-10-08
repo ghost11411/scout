@@ -49,7 +49,7 @@ BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOL
 OK()      { printf "\r${GREEN}✅ %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" >> "$LOG_FILE"; }
+ERR()     { printf "${RED}[✘] %s${RESET}\n" "$1" | tee -a "$LOG_FILE" >&2; }
 
 RUN_CMD() {
     local DESC="$1"; shift
@@ -155,6 +155,7 @@ if [ "$FORCE" = false ] && [ "$UPDATE" = false ] && [ "$UNINSTALL" = false ]; th
     WARN "No flags provided. Proceeding with default installation."
     if [ -d "$INSTALL_DIR" ]; then
         ERR "$INSTALL_DIR already exists. Use --force to reinstall or --update to update."
+        WARN "Check $LOG_FILE for details."
         exit 1
     else
         INFO "Cloning repository..."
