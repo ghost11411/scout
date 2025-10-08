@@ -19,6 +19,7 @@ TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+SUBLISTER_DIR="$WORDLISTS_DIR/sublister"
 
 APT_PACKAGES=(
     git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
@@ -218,19 +219,21 @@ if command -v go >/dev/null 2>&1; then
 fi
 
 # ---------------- CLONE REPOS ----------------
-for ENTRY in "GF-Patterns|$WORDLISTS_DIR/GF-Patterns|https://github.com/1ndianl33t/GF-Patterns.git" \
-             "Sublist3r|$BIN_DIR/Sublist3r|https://github.com/aboul3la/Sublist3r.git"; do
-    IFS='|' read -r NAME PATH GITURL <<< "$ENTRY"
-    if [ -d "$PATH/.git" ]; then
-        INFO "Updating $NAME..."
-        git -C "$PATH" pull --ff-only >>"$LOG_FILE" 2>&1 && OK "$NAME updated"
-    elif [ -d "$PATH" ]; then
-        WARN "$PATH exists but is not a git repo. Skipping $NAME"
-    else
-        INFO "Cloning $NAME..."
-        git clone --depth 1 "$GITURL" "$PATH" >>"$LOG_FILE" 2>&1 && OK "$NAME cloned"
-    fi
-done
+INFO "Cloning additional repositories..."
+if [ -d "$GF_DIR" ]; then
+    INFO "$GF_DIR already exists. Pulling latest changes..."
+    cd "$GF_DIR"
+    git pull >>"$LOG_FILE" 2>&1 && OK "Updated GF-Patterns in $GF_DIR"
+else
+    git clone https://github.com/1ndianl33t/GF-Patterns.git "$GF_DIR" >>"$LOG_FILE" 2>&1 && OK "Cloned GF-Patterns to "$GF_DIR"" 
+fi
+if [ -d "$SUBLISTER_DIR" ]; then
+    INFO "$SUBLISTER_DIR already exists. Pulling latest changes..."
+    cd "$SUBLISTER_DIR"
+    git pull >>"$LOG_FILE" 2>&1 && OK "Updated Sublist3r in $SUBLISTER_DIR"
+else
+    git clone https://github.com/aboul3la/Sublist3r.git "$SUBLISTER_DIR" >>"$LOG_FILE" 2>&1 && OK "Cloned Sublist3r to "$SUBLISTER_DIR""
+fi
 
 # ---------------- SYMLINK ----------------
 /bin/chmod 755 "$BIN_DIR"/* 2>/dev/null || true
