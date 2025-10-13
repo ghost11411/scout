@@ -101,12 +101,38 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -d) INPUT_DOMAIN="$2"; shift 2 ;;
-    -f) INPUT_FILE="$2"; shift 2 ;;
-    -o) CUSTOM_OUTPUT="$2"; shift 2 ;;
+    -d)
+      # require an argument that is not another flag
+      if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+        BANNER
+        ERR "Option -d requires a domain argument."
+        USAGE
+      fi
+      INPUT_DOMAIN="$2"; shift 2
+      ;;
+    -f)
+      # require an argument that is not another flag
+      if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+        BANNER
+        ERR "Option -f requires a file path argument."
+        USAGE
+      fi
+      INPUT_FILE="$2"; shift 2
+      ;;
+    -o)
+      if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+        BANNER
+        ERR "Option -o requires a directory name."
+        USAGE
+      fi
+      CUSTOM_OUTPUT="$2"; shift 2
+      ;;
     --debug) DEBUG=1; shift ;;
     -h|--help) BANNER; USAGE ;;
-    *) echo -e "${RED}Unknown option: $1${RESET}"; USAGE ;;
+    *)
+      ERR "Unknown option: $1"
+      USAGE
+      ;;
   esac
 done
 
@@ -332,6 +358,87 @@ RUN_FFUF_AND_NUCLEI_PER_HOST(){
 
 # ---------------- MAIN ----------------
 BANNER
+
+# ---------------- VALIDATE -f & RUN SUMMARY (with truncation) ----------------
+
+# How many domains to show from a file before truncating
+MAX_DISPLAY=25   # change this value if you want to show more/less
+
+# If -f was provided, make sure file exists and is readable
+if [[ -n "$INPUT_FILE" ]]; then
+  if [[ ! -f "$INPUT_FILE" ]]; then
+    BANNER
+    ERR "File not found: $INPUT_FILE"
+    USAGE
+  fi
+  if [[ ! -r "$INPUT_FILE" ]]; then
+    BANNER
+    ERR "File not readable: $INPUT_FILE"
+    exit 1
+  fi
+fi
+
+# Determine scan mode and prepare domain list if needed
+if [[ -n "$INPUT_DOMAIN" ]]; then
+  SCAN_MODE="Single Domain"
+  TARGET_DESC="$INPUT_DOMAIN"
+elif [[ -n "$INPUT_FILE" ]]; then
+  SCAN_MODE="Domain List (from file)"
+  # read domains into an array (preserve order, skip empty/comment lines)
+  mapfile -t DOMAIN_LIST < <(awk 'NF && $1 !~ /^#/ {print $0}' "$INPUT_FILE")
+  TOTAL_DOMAINS=${#DOMAIN_LIST[@]}
+else
+  SCAN_MODE="Unknown"
+  TARGET_DESC="N/A"
+fi
+
+# Print summary (OUTPUT_DIR exists at this point)
+echo -e "${BOLD}${CYAN}"
+echo "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
+echo -e "${RESET}${BOLD}Mode:${RESET} ${SCAN_MODE}"
+
+if [[ -n "$INPUT_DOMAIN" ]]; then
+  echo -e "${BOLD}Target:${RESET}           ${TARGET_DESC}"
+elif [[ -n "$INPUT_FILE" ]]; then
+  echo -e "${BOLD}Targets (from file):${RESET}"
+  if (( TOTAL_DOMAINS == 0 )); then
+    echo "  (no domains found in file)"
+  else
+    # determine how many lines to show
+    if (( TOTAL_DOMAINS <= MAX_DISPLAY )); then
+      SHOW_COUNT=$TOTAL_DOMAINS
+    else
+      SHOW_COUNT=$MAX_DISPLAY
+    fi
+
+    for ((i=0; i<SHOW_COUNT; i++)); do
+      echo "  - ${DOMAIN_LIST[i]}"
+    done
+
+    if (( TOTAL_DOMAINS > SHOW_COUNT )); then
+      REMAIN=$((TOTAL_DOMAINS - SHOW_COUNT))
+      echo "  ... +${REMAIN} more"
+    fi
+  fi
+else
+  echo -e "${BOLD}Target(s):${RESET}        N/A"
+fi
+
+echo -e "${BOLD}Output Directory:${RESET} ${OUTPUT_DIR}"
+echo -e "${BOLD}Tools Used:${RESET}"
+cat <<'EOF'
+  • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls
+  • Live host discovery: dnsx
+  • Port scanning: naabu, masscan
+  • Service detection: nmap
+  • Directory fuzzing: ffuf
+  • Vulnerability scanning: nuclei
+EOF
+echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+
+# short pause so the user can read the summary before scanning begins
+sleep 1
+
 CHECK_ROOT
 # ---------------- INPUT VALIDATION (NEW SECTION) ----------------
 if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_FILE" ]]; then
