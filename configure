@@ -43,6 +43,14 @@ GO_TOOLS=(
     "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
 )
 
+WORDLISTS=(
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-110000.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/big.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
+)
+
 # ---------------- COLORS ----------------
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
@@ -251,6 +259,20 @@ if [ -d "$SUBLISTER_DIR" ]; then
 else
     git clone https://github.com/aboul3la/Sublist3r.git "$SUBLISTER_DIR" >>"$LOG_FILE" 2>&1 && OK "Cloned Sublist3r to "$SUBLISTER_DIR""
 fi
+
+# ---------------- DOWNLOAD WORDLISTS ----------------
+INFO "Downloading wordlists..."
+mkdir -p "$WORDLISTS_DIR"
+for URL in "${WORDLISTS[@]}"; do
+    FILENAME=$(basename "$URL")
+    DEST_PATH="$WORDLISTS_DIR/$FILENAME"
+    if curl -L -s -o "$DEST_PATH" "$URL"; then  
+        OK "Downloaded $FILENAME"
+    else
+        WARN "Failed to download $FILENAME from $URL"
+    fi
+done
+OK "Wordlists downloaded to $WORDLISTS_DIR"
 
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 # ---------------- SYMLINK ----------------
