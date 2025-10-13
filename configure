@@ -19,7 +19,7 @@ TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 GF_DIR="$WORDLISTS_DIR/GF-Patterns"
-SUBLISTER_DIR="$WORDLISTS_DIR/sublister"
+SUBLISTER_DIR="$BIN_DIR/sublister"
 
 APT_PACKAGES=(
     git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip cewl python3-shodan make ca-certificates libpcap-dev golang-go
@@ -219,6 +219,23 @@ if command -v go >/dev/null 2>&1; then
 fi
 
 # ---------------- CLONE REPOS ----------------
+INFO "Installing Findomain..."
+LATEST_RELEASE_URL="https://github.com/Findomain/Findomain/releases/latest/download/findomain-linux.zip"
+TEMP_DIR=$(mktemp -d)
+ZIP_FILE="${TEMP_DIR}/findomain.zip"
+if ! curl -L -s -o "${ZIP_FILE}" "${LATEST_RELEASE_URL}"; then
+    echo "Error: Failed to download Findomain from ${LATEST_RELEASE_URL}"
+    rm -rf "${TEMP_DIR}"
+return 1
+fi
+if ! unzip -q -o "${ZIP_FILE}" -d "${BIN_DIR}"; then
+    echo "Error: Failed to extract the zip file to ${BIN_DIR}."
+    rm -rf "${TEMP_DIR}"
+    return 1
+fi
+rm -rf "${TEMP_DIR}"
+OK "Findomain installed to ${BIN_DIR}/findomain"
+
 INFO "Cloning additional repositories..."
 if [ -d "$GF_DIR" ]; then
     INFO "$GF_DIR already exists. Pulling latest changes..."
@@ -235,11 +252,15 @@ else
     git clone https://github.com/aboul3la/Sublist3r.git "$SUBLISTER_DIR" >>"$LOG_FILE" 2>&1 && OK "Cloned Sublist3r to "$SUBLISTER_DIR""
 fi
 
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 # ---------------- SYMLINK ----------------
 /bin/chmod 755 "$BIN_DIR"/* 2>/dev/null || true
 [ -f "$INSTALL_DIR/scout" ] && /bin/chmod +x "$INSTALL_DIR/scout" || true
 /bin/ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
 OK "Symlink created"
+
+INFO "All binaries are located in $BIN_DIR"
+INFO "All wordlists are located in $WORDLISTS_DIR"
 
 # ---------------- SHOW TOTAL TIME ----------------
 END_TIME=$(/usr/bin/date +%s)
@@ -248,6 +269,7 @@ INFO "Script completed in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSE
 
 # ---------------- SUMMARY ----------------
 OK "Scout installation completed successfully!"
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 echo -e "Type ${BOLD}${CYAN}scout${RESET} to get started."
 echo -e "For help, type ${BOLD}${CYAN}scout --help${RESET} or visit the GitHub repository: ${BOLD}${CYAN}${REPO_URL}${RESET}"
 echo -e "${CYAN}${BOLD}Happy Recon!${RESET} 🔎"
