@@ -356,9 +356,6 @@ RUN_FFUF_AND_NUCLEI_PER_HOST(){
   fi
 }
 
-# ---------------- MAIN ----------------
-BANNER
-
 # ---------------- VALIDATE -f & RUN SUMMARY (with truncation) ----------------
 
 # How many domains to show from a file before truncating
@@ -377,6 +374,8 @@ if [[ -n "$INPUT_FILE" ]]; then
     exit 1
   fi
 fi
+
+BANNER
 
 # Determine scan mode and prepare domain list if needed
 if [[ -n "$INPUT_DOMAIN" ]]; then
