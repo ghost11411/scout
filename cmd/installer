@@ -91,40 +91,6 @@ STOP_SPINNER() {
     ELAPSED=$(( END - SPIN_START ))
 }
 
-# ---------------- BANNER ----------------
-BANNER(){
-  ASCII_SCOUT=$(cat <<'EOF'
-    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
-   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
-  | $$  \__/| $$  \__/| $$  | $$| $$  | $$   | $$
-  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$
-   \____  $$| $$      | $$  | $$| $$  | $$   | $$
-   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$
-  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$
-   \______/  \______/  \______/  \______/    |__/
-EOF
-  )
-  TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-
-  # Animate ASCII letters line by line
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0005
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-
-  # Animate tagline
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.001
-  done
-  printf "\n"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-}
-
 # ---------------- REQUIRE ROOT ----------------
 REQUIRE_ROOT() {
   if (( EUID != 0 )); then
@@ -135,7 +101,6 @@ REQUIRE_ROOT() {
 }
 
 # ---------------- MAIN INSTALL ----------------
-BANNER
 REQUIRE_ROOT "$@"
 
 INFO "Setting up directories and tools..."
