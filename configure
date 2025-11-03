@@ -13,36 +13,6 @@ FORCE=0
 UPDATE=0
 UNINSTALL=0
 
-# ---------------- BANNER ----------------
-BANNER() {
-  local ASCII_SCOUT=$(cat <<'EOF'
-    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
-   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
-  | $$  \__/| $$  \__/| $$  | $$| $$  | $$   | $$   
-  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$   
-   \____  $$| $$      | $$  | $$| $$  | $$   | $$   
-   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$   
-  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$   
-   \______/  \______/  \______/  \______/    |__/   
-EOF
-  )
-  local TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0003
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.0007
-  done
-  printf "\n\n"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-}
-
 # ---------------- LOGGING ----------------
 OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
 INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
@@ -86,10 +56,10 @@ EOF
 # ---------------- PARSE FLAGS ----------------
 for ARG in "$@"; do
     case "$ARG" in
-        --force) FORCE=1 ;;
-        --update) UPDATE=1 ;;
-        --uninstall) UNINSTALL=1 ;;
-        --version) echo "Scout Installer ${VER}"; exit 0 ;;
+        --force|-f) FORCE=1 ;;
+        --update|-up) UPDATE=1 ;;
+        --uninstall|-un) UNINSTALL=1 ;;
+        --version|-v) echo "Scout Installer ${VER}"; exit 0 ;;
         --help|-h) USAGE; exit 0 ;;
         *) ERR "Unknown option: $ARG"; USAGE; exit 1 ;;
     esac
