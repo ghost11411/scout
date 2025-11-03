@@ -68,7 +68,7 @@ ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
 
 RUN_TOOL() {
     local func="$1"
-    echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds"
+    echo -e "${YELLOW}[~] $func${RESET}: 0" #, ${TIME} seconds"
     $func
 }
 
