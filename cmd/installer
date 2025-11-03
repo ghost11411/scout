@@ -181,7 +181,7 @@ clone_or_update "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" "Su
 INFO "Downloading Wordlists..."
 for URL in "${WORDLISTS[@]}"; do
     FNAME=$(basename "$URL")
-    RUN_TOOL "Wordlist: $FNAME" curl -L -s -o "$WORDLISTS_DIR/$FNAME" "$URL"
+    INFO "Wordlist: $FNAME" && curl -L -s -o "$WORDLISTS_DIR/$FNAME" "$URL" > /dev/null 2>&1 && OK "$FNAME downloaded" || WARN "$FNAME download failed"
 done
 
 INFO "Make binaries executable" && find "$BIN_DIR" -type f -exec chmod 755 {} +
