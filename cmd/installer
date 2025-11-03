@@ -66,11 +66,11 @@ INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
 
-RUN_TOOL() {
-    local func="$1"
-    echo -e "${YELLOW}[~] $func${RESET}: 0" #, ${TIME} seconds"
-    $func
-}
+# RUN_TOOL() {
+#     local func="$1"
+#     echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds"
+#     $func
+# }
 
 # Function to handle CLEANUP on Ctrl+C
 CLEANUP(){
@@ -121,14 +121,18 @@ STOP_SPINNER(){
 # ---------------- CONTINUE INSTALL ----------------
 INFO "Setting up directories and tools..."
 
-RUN_TOOL "Create dirs" mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
-RUN_TOOL "Make executable" find "$INSTALL_DIR" -type f -exec chmod +x {} +
+INFO "Create dirs" 
+mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
+INFO "Make executable" 
+find "$INSTALL_DIR" -type f -exec chmod +x {} +
 
-RUN_TOOL "Update APT" apt-get update -y -qq
-RUN_TOOL "Install APT packages" apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"
+INFO "Update APT" 
+apt-get update -y -qq
+INFO "Install APT packages" 
+apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"
 
 if command -v go >/dev/null 2>&1; then
-    INFO "Installing Go tools..."
+    INFO "Installing Go Tools..."
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:$PATH"
     for PAIR in "${GO_TOOLS[@]}"; do
@@ -157,7 +161,8 @@ INSTALL_FINDOMAIN() {
     fi
     rm -rf "$TMP"
 }
-RUN_TOOL "Findomain" INSTALL_FINDOMAIN
+INFO "Findomain" 
+INSTALL_FINDOMAIN
 
 clone_or_update() {
     local URL="$1" DIR="$2" NAME="$3"
@@ -178,9 +183,9 @@ for URL in "${WORDLISTS[@]}"; do
     RUN_TOOL "Wordlist: $FNAME" curl -L -s -o "$WORDLISTS_DIR/$FNAME" "$URL"
 done
 
-RUN_TOOL "Make binaries executable" find "$BIN_DIR" -type f -exec chmod 755 {} +
-RUN_TOOL "Make scout executable" chmod +x "$INSTALL_DIR/scout"
-RUN_TOOL "Create symlink" ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+INFO "Make binaries executable" && find "$BIN_DIR" -type f -exec chmod 755 {} +
+INFO "Make scout executable" && chmod +x "$INSTALL_DIR/scout"
+INFO "Create symlink" && ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)
