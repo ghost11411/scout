@@ -139,7 +139,7 @@ if command -v go >/dev/null 2>&1; then
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
         INFO "Go: $NAME" 
-        go install -trimpath "$PKG"
+        go install -trimpath "$PKG" > /dev/null 2>&1 && OK "$NAME installed" || WARN "$NAME installation failed"
     done
 else
     WARN "Go not found – skipping Go tools"
