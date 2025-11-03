@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- SUBDOMAIN COLLECTION ----------------
+COLLECT_SUBDOMAINS(){
+  mkdir -p "$RAW_DIR"
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    INFO "Collecting subdomains for $domain"
+    mkdir -p "$RAW_DIR/$domain"
+    INFO "subfinder" && "$BIN_DIR/subfinder" -d "$domain" -all -o "$RAW_DIR/$domain/subfinder.out"
+    INFO "assetfinder" && "$BIN_DIR/assetfinder" "$domain" ">" "$RAW_DIR/$domain/assetfinder.out"
+    INFO "findomain" && "$BIN_DIR/findomain" -t "$domain" --quiet -u "$RAW_DIR/$domain/findomain.out"
+    INFO "gau" && "$BIN_DIR/gau" "$domain" | "$BIN_DIR/unfurl" domain | sort -u > "$RAW_DIR/$domain/gau.out"
+    INFO "waybackurls" && "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" domain > "$RAW_DIR/$domain/wayback.out"
+    INFO "amass" && "$BIN_DIR/amass" enum -d "$domain" -o "$RAW_DIR/$domain/amass.out"
+  done < "$WILDCARDS"
+
+  # after all tools finished for all domains, combine into single file
+  ALL_SUBS_FILE="$RAW_DIR/all_subdomains.out"
+  > "$ALL_SUBS_FILE"
+  for d in "$RAW_DIR"/*; do
+    [[ -d "$d" ]] || continue
+    cat "$d"/*.out 2>/dev/null || true
+  done | $(command -v unfurl || echo "$BIN_DIR/unfurl") domain 2>/dev/null | sort -u > "$ALL_SUBS_FILE" || true
+  OK "Collected all subdomains -> $ALL_SUBS_FILE"
+}

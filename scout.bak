@@ -12,15 +12,12 @@ WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
 
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
-VER="v0.2"
+VER="v0.1"
 INSTALL_DIR="${HOME}/scout"
 TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 WORKSPACE_DIR="${INSTALL_DIR}/workspace"
-FORCE=0
-UPDATE=0
-UNINSTALL=0
 
 # scanner rate/delay defaults (conservative)
 NAABU_RATE=150
@@ -87,31 +84,26 @@ USAGE() {
   cat <<EOF
 Usage: scout [options]
 You can provide single or multiple comma-separated values for -dt and -wd:
-  -dd   <domain1.com,domain2.com,...>        One or more domains
-  -df   <file>                               File with one domain per line
-  -wd   <*.domain1.com,*.domain2.com,...>    One or more wildcard domains
-  -wf   <file>                               File with one wildcard per line
+  -dd   <domain.com[domain1.com,domain2.com,...]>      One or more domains
+  -df   <file>                                         File with one domain per line
+  -wd   <*.domain.com[*.domain.com,*.domain2.com,...]>            One or more wildcard domains
+  -wc | -wf <file>                                     File with one wildcard per line
 
 Optional:
-  -o <dir>                                   Custom output directory (under $WORKSPACE_DIR)
+  -o <dir>                                  Custom output directory (under $WORKSPACE_DIR)
 
 Examples:
   scout -dd example.com
-  scout -dd example.com -o <output_dir_name>
-  scout -dd ex1.com,ex2.com -wd *.ex.com,*.ex2.com
-  scout -wd *.example.com
-  scout -df domains.txt
+  scout -dd ex1.com,ex2.com -wd '*.ex.com,*.ex2.com'
   scout -df domains.txt -wf wildcards.txt
-  scout -df example.com -wf wildcards.txt -o <output_dir_name>
+  scout -dd example.com -o myout
 
 Flags:
-  -h, --help         Show this help
-  -v, --version      Show version information
-  --install [action] Run installer (actions: update | force)
+  -h, --help        Show this help
+  -v, --version     Show version information
 EOF
   exit 0
 }
-
 BANNER
 REQUIRE_ROOT "$@"
 
@@ -124,7 +116,7 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -dd)
-      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -dd requires argument(s)."; USAGE; }
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -dt requires argument(s)."; USAGE; }
       INPUT_DOMAIN="$2"; shift 2;;
     -df)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -df requires a file path."; USAGE; }
@@ -133,50 +125,11 @@ while [[ $# -gt 0 ]]; do
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wd requires argument(s)."; USAGE; }
       INPUT_WILDCARD="$2"; shift 2;;
     -wf)
-      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wf requires a file path."; USAGE; }
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option $1 requires a file path."; USAGE; }
       INPUT_WILDCARD_FILE="$2"; shift 2;;
     -o)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -o requires a directory name."; USAGE; }
       CUSTOM_OUTPUT="$2"; shift 2;;
-    install)
-        # CONFIGURE="${INSTALL_DIR}/configure"
-        # [[ ! -f "$CONFIGURE" ]] && CONFIGURE="./configure"
-
-        # no args = default install
-        if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
-            INFO "Running default installation..."
-            curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash
-            # bash "$CONFIGURE"
-            exit 0
-        fi
-
-        case "$2" in
-            --force|-f)
-                INFO "Running forced reinstallation..."
-                curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash -s -- --force
-                # bash "$CONFIGURE" --force
-                exit 0
-                ;;
-            --update|-up)
-                INFO "Running update..."
-                curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash -s -- --update
-                # bash "$CONFIGURE" --update
-                exit 0
-                ;;
-            --uninstall|-un)
-                INFO "Running uninstallation..."
-                [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
-                [[ -L /usr/local/bin/scout ]] && rm -f /usr/local/bin/scout && OK "Removed symlink"
-                OK "Uninstalled successfully."
-                # bash "$CONFIGURE" --uninstall
-                exit 0
-                ;;
-            *)
-                ERR "Unknown install action: $2"
-                USAGE
-                ;;
-        esac
-        ;;
     -h|--help) USAGE ;;
     -v|--version)
       echo -e "${BOLD}Version:${RESET} ${VER}"
@@ -263,16 +216,18 @@ PICK_WORDLIST(){
 
 # ---------------- INPUT VALIDATION ----------------
 if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -z "$INPUT_WILDCARD_FILE" ]]; then
-  ERR "No input provided. Use -dd, -df, -wd, or -wf."
+  ERR "No input provided. Use -dt, -df, -wd, or -wc/-wf."
   USAGE
 fi
 
 # ---------------- BUILD TARGETS ----------------
 TARGETS_FILE="$OUTPUT_DIR/targets.txt"
-: > "$TARGETS_FILE"
+: > "$TARGETS_FILE"  # create/empty file
 
+# helper: trim whitespace
 _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
 
+# 1) domains passed directly via -dt (comma separated allowed)
 if [[ -n "$INPUT_DOMAIN" ]]; then
   IFS=',' read -ra D_ARR <<< "$INPUT_DOMAIN"
   for d in "${D_ARR[@]}"; do
@@ -281,11 +236,13 @@ if [[ -n "$INPUT_DOMAIN" ]]; then
   done
 fi
 
+# 2) domain file -df
 if [[ -n "$INPUT_DOMAIN_FILE" ]]; then
   [[ ! -r "$INPUT_DOMAIN_FILE" ]] && { ERR "Cannot read domain file: $INPUT_DOMAIN_FILE"; exit 1; }
   awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$TARGETS_FILE"
 fi
 
+# 3) wildcard(s) via -wd (comma separated allowed)
 if [[ -n "$INPUT_WILDCARD" ]]; then
   IFS=',' read -ra W_ARR <<< "$INPUT_WILDCARD"
   for w in "${W_ARR[@]}"; do
@@ -294,11 +251,13 @@ if [[ -n "$INPUT_WILDCARD" ]]; then
   done
 fi
 
+# 4) wildcard file -wc or -wf
 if [[ -n "$INPUT_WILDCARD_FILE" ]]; then
   [[ ! -r "$INPUT_WILDCARD_FILE" ]] && { ERR "Cannot read wildcard file: $INPUT_WILDCARD_FILE"; exit 1; }
   awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$TARGETS_FILE"
 fi
 
+# remove duplicates while preserving order
 awk '!seen[$0]++' "$TARGETS_FILE" > "${TARGETS_FILE}.uniq" && mv "${TARGETS_FILE}.uniq" "$TARGETS_FILE"
 
 # ---------------- SUMMARY ----------------
@@ -323,37 +282,81 @@ EOF
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 sleep 1
 
-# ---------------- LOAD EXTERNAL COMMANDS ----------------
-CMDS_DIR="./cmd"
+# ---------------- STUB FUNCTIONS ----------------
+# These are basic stubs that simulate behavior and create minimal placeholder outputs.
+# Replace their internals with real implementations or source external scripts as you build them.
 
-SOURCE_CMD() {
-  local func="$1"
-  local script="${CMDS_DIR}/${func}.sh"
-  if [[ -f "$script" ]]; then
-    source "$script"
-    OK "Loaded ${script}"
-  else
-    WARN "Missing ${script} — using fallback stub."
-    eval "${func}(){ INFO \"${func}: not implemented (stub)\"; }"
-  fi
+COLLECT_SUBDOMAINS(){
+  # args: domain, domain_output_dir
+  local domain="${1:-}"
+  local outdir="${2:-}"
+  INFO "COLLECT_SUBDOMAINS: enumerating subdomains for ${domain} (stub)"
+  mkdir -p "${outdir}/raw" "${outdir}/collected"
+  # create a placeholder subdomains file
+  echo "www.${domain}" > "${outdir}/raw/all_subdomains.out"
+  echo "www.${domain}" > "${outdir}/collected/all_subdomains.txt"
+  OK "COLLECT_SUBDOMAINS: created placeholder subdomain files in ${outdir}"
 }
 
-SOURCE_CMD "COLLECT_SUBDOMAINS"
-SOURCE_CMD "COLLECT_LIVE"
-SOURCE_CMD "PORT_SCAN_PER_HOST"
-SOURCE_CMD "SERVICE_DETECT_NMAP"
-SOURCE_CMD "RUN_FFUF_AND_NUCLEI_PER_HOST"
+COLLECT_LIVE(){
+  # args: domain, domain_output_dir
+  local domain="${1:-}"
+  local outdir="${2:-}"
+  INFO "COLLECT_LIVE: resolving live hosts for ${domain} (stub)"
+  mkdir -p "${outdir}/collected"
+  # create a placeholder hosts list containing a dummy host (so downstream steps run)
+  # For wildcard entries we keep the host as-is; for normal domains we produce host "www.domain"
+  if [[ "$domain" == \** ]]; then
+    # wildcard - write the wildcard without modification
+    echo "${domain}" > "${outdir}/collected/hosts.txt"
+  else
+    echo "www.${domain}" > "${outdir}/collected/hosts.txt"
+  fi
+  OK "COLLECT_LIVE: wrote placeholder hosts to ${outdir}/collected/hosts.txt"
+}
+
+PORT_SCAN_PER_HOST(){
+  # args: host, domain_output_dir
+  local host="${1:-}"
+  local outdir="${2:-}"
+  INFO "PORT_SCAN_PER_HOST: scanning ${host} (stub - not performing real scan)"
+  mkdir -p "${outdir}/raw/ports" "${outdir}/collected/ports"
+  echo "80,443" > "${outdir}/collected/ports/${host}.ports"
+  OK "PORT_SCAN_PER_HOST: created placeholder ports file for ${host}"
+}
+
+SERVICE_DETECT_NMAP(){
+  # args: host, domain_output_dir
+  local host="${1:-}"
+  local outdir="${2:-}"
+  INFO "SERVICE_DETECT_NMAP: detecting services on ${host} (stub)"
+  mkdir -p "${outdir}/raw/nmap" "${outdir}/collected/nmap"
+  echo "http (80) - placeholder" > "${outdir}/collected/nmap/${host}.nmap"
+  OK "SERVICE_DETECT_NMAP: created placeholder nmap output for ${host}"
+}
+
+RUN_FFUF_AND_NUCLEI_PER_HOST(){
+  # args: host, domain_output_dir
+  local host="${1:-}"
+  local outdir="${2:-}"
+  INFO "RUN_FFUF_AND_NUCLEI_PER_HOST: fuzzing and running nuclei on ${host} (stub)"
+  mkdir -p "${outdir}/raw/ffuf" "${outdir}/collected/ffuf" "${outdir}/raw/nuclei" "${outdir}/collected/nuclei"
+  echo "/login" > "${outdir}/collected/ffuf/${host}.paths"
+  echo "nuclei: no findings (placeholder)" > "${outdir}/collected/nuclei/${host}.nuclei"
+  OK "RUN_FFUF_AND_NUCLEI_PER_HOST: created placeholder ffuf/nuclei outputs for ${host}"
+}
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
 INFO "Output directory: $OUTPUT_DIR"
 CHECK_INTERNET
-CHECK_BINS || true
+CHECK_BINS || true  # allow stubs to run even if tools not locally installed (remove || true in prod)
 
 while read -r DOMAIN; do
   DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
   [[ -z "$DOMAIN" ]] && continue
 
+  # Build safe per-domain directory name: replace '*' with 'WILDCARD' and strip slashes
   SAFE_NAME="${DOMAIN//\*/WILDCARD}"
   SAFE_NAME="${SAFE_NAME//\//_}"
   DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"

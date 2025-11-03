@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- JS FILE COLLECTION ----------------
+COLLECT_JS_FILES(){
+  mkdir -p "$RAW_DIR"
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    INFO "Collecting JS files for $domain"
+    mkdir -p "$RAW_DIR/$domain"
+    INFO "Running gau" && "$BIN_DIR/gau" "$domain" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$domain/gau_js.out"
+    INFO "waybackurls" && "$BIN_DIR/waybackurls" "$domain" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$domain/wayback_js.out"
+  done < "$WILDCARDS"
+    # after all tools finished for all domains, combine into single file
+    ALL_JS_FILE="$RAW_DIR/all_js_files.out"
+    > "$ALL_JS_FILE"
+    for d in "$RAW_DIR"/*; do
+      [[ -d "$d" ]] || continue
+      cat "$d"/*_js.out 2>/dev/null || true
+    done | sort -u > "$ALL_JS_FILE" || true
+    OK "Collected all JS files -> $ALL_JS_FILE"
+}

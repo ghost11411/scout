@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- LIVE HOSTS (dnsx) ----------------
+COLLECT_LIVE(){
+  mkdir -p "$COLLECTED_DIR"
+  ALL_SUBS_FILE="$RAW_DIR/all_subdomains.out"
+  if [[ ! -s "$ALL_SUBS_FILE" ]]; then
+    ERR "No subdomains found to resolve"
+    return
+  fi
+  RESOLVED_OUT="$COLLECTED_DIR/resolved.out"
+  INFO "Running dnsx" && command -v dnsx || echo \"$BIN_DIR/dnsx\" -silent -l "$ALL_SUBS_FILE" -a -resp -o "$RESOLVED_OUT"
+  OK "Resolved live hosts -> $RESOLVED_OUT"
+  # create hosts list (unique hostnames)
+  awk '{print $1}' "$RESOLVED_OUT" | sort -u > "$COLLECTED_DIR/hosts.txt" || true
+}

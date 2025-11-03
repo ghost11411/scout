@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- SERVICE DETECTION (nmap using ports file) ----------------
+SERVICE_DETECT(){
+  local HOST="$1"
+  local HOST_SAFE
+  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
+  local PORTS_DIR="$COLLECTED_DIR/ports"
+  local PORT_FILE="$PORTS_DIR/${HOST_SAFE}_ports"
+  local NMAP_OUT="$PORTS_DIR/${HOST_SAFE}_nmap_services.nmap"
+
+  if [[ ! -s "$PORT_FILE" ]]; then
+    INFO "No ports file for $HOST; skipping nmap service detection"
+    return
+  fi
+
+  # build comma-separated port list
+  ports=$(paste -sd, "$PORT_FILE")
+  if [[ -z "$ports" ]]; then
+    INFO "No ports found for $HOST after aggregation; skipping nmap"
+    return
+  fi
+
+  INFO "Running nmap -sV -T4 against $HOST ports: $ports"
+  RUN_TOOL "nmap services -> $HOST" "$(command -v nmap || echo \"$BIN_DIR/nmap\")" -Pn -sV -T4 -p "$ports" -oN "$NMAP_OUT" "$HOST"
+  OK "Nmap services saved -> $NMAP_OUT"
+}

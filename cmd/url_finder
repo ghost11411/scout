@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- URL COLLECTION ----------------
+COLLECT_URLS(){
+  mkdir -p "$RAW_DIR"
+  while read -r domain; do
+    domain=$(echo "$domain" | tr -d '[:space:]')
+    [ -z "$domain" ] && continue
+    INFO "Collecting URLs for $domain"
+    mkdir -p "$RAW_DIR/$domain"
+    INFO "gau" && "$BIN_DIR/gau" "$domain" > "$RAW_DIR/$domain/gau.out"
+    INFO "waybackurls" && "$BIN_DIR/waybackurls" "$domain" > "$RAW_DIR/$domain/wayback.out"
+  done < "$WILDCARDS"
+
+  # after all tools finished for all domains, combine into single file
+  ALL_URLS_FILE="$RAW_DIR/all_urls.out"
+  > "$ALL_URLS_FILE"
+  for d in "$RAW_DIR"/*; do
+    [[ -d "$d" ]] || continue
+    cat "$d"/*.out 2>/dev/null || true
+  done | sort -u > "$ALL_URLS_FILE" || true
+  OK "Collected all URLs -> $ALL_URLS_FILE"
+}

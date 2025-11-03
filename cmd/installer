@@ -11,7 +11,7 @@ BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"
 BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- VARIABLES ----------------
-VER="v0.2"
+VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
 INSTALL_DIR="${HOME}/scout"
 TOOLS_DIR="${INSTALL_DIR}/tools"
@@ -176,9 +176,8 @@ INSTALL_FINDOMAIN
 INSTALL_SUBLIST3R() {
   START_SPINNER "Installing Sublist3r"
   START=$(date +%s)
-
-  git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" || true
   if [[ -d "$SUBLISTER_DIR" ]]; then
+    git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" || true
     if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages; then
       STATUS="success"
     else

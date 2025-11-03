@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- PORT SCANNING (naabu then masscan sequentially) ----------------
+PORT_SCAN_PER_HOST(){
+  local HOST="$1"
+  local HOST_SAFE
+  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
+  local PORTS_DIR="$COLLECTED_DIR/ports"
+  mkdir -p "$PORTS_DIR"
+
+  NAABU_OUT="$PORTS_DIR/${HOST_SAFE}_naabu.out"
+  MASS_OUT="$PORTS_DIR/${HOST_SAFE}_masscan.out"
+
+  INFO "Running naabu for $HOST"
+  INFO "naabu -> $HOST" && command -v naabu || echo \"$BIN_DIR/naabu\" -host "$HOST" -ports 1-65535 -rate "$NAABU_RATE" -silent -o "$NAABU_OUT"
+
+  INFO "Running masscan for $HOST"
+  if command -v masscan >/dev/null 2>&1; then
+    INFO "masscan -> $HOST" && command -v masscan || echo \"$BIN_DIR/masscan\" "$HOST" -p1-65535 --rate "$MASSCAN_RATE" -oG "$MASS_OUT"
+  else
+    INFO "masscan not installed, skipping masscan for $HOST"
+  fi
+
+  # aggregate ports from naabu and masscan -> hostname_ports (dedup)
+  AGG="$PORTS_DIR/${HOST_SAFE}_agg.txt"
+  > "$AGG"
+  if [[ -f "$NAABU_OUT" ]]; then
+    # naabu writes one port per line typically
+    grep -oE '[0-9]{1,5}' "$NAABU_OUT" >> "$AGG" || true
+  fi
+  if [[ -f "$MASS_OUT" ]]; then
+    grep -oE '[0-9]{1,5}' "$MASS_OUT" >> "$AGG" || true
+  fi
+  sort -n "$AGG" | awk '
+    $1>=1 && $1<=65535 {print $1}
+  ' | uniq > "$PORTS_DIR/${HOST_SAFE}_ports"
+  OK "Ports for $HOST -> $PORTS_DIR/${HOST_SAFE}_ports"
+}

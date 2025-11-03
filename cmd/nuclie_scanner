@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- FFUF & NUCLEI (sequential per host) ----------------
+RUN_NUCLEI(){
+  local HOST="$1"
+  local HOST_SAFE
+  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
+  local NUC_DIR="$COLLECTED_DIR/nuclei"
+  mkdir -p "$NUC_DIR"
+
+  # prepare nuclei targets file using host:port combos (http & https)
+  NUC_TARGETS="$NUC_DIR/${HOST_SAFE}_targets.txt"
+  > "$NUC_TARGETS"
+  # use ports file to generate host:port combos
+  PORT_FILE="$COLLECTED_DIR/ports/${HOST_SAFE}_ports"
+  if [[ -s "$PORT_FILE" ]]; then
+    while read -r P; do
+      echo "http://${HOST}:${P}" >> "$NUC_TARGETS"
+      echo "https://${HOST}:${P}" >> "$NUC_TARGETS"
+    done < "$PORT_FILE"
+  else
+    echo "http://${HOST}" >> "$NUC_TARGETS"
+    echo "https://${HOST}" >> "$NUC_TARGETS"
+  fi
+
+  if [[ -s "$NUC_TARGETS" ]]; then
+    NUC_OUT="$NUC_DIR/${HOST_SAFE}.json"
+    INFO "nuclei -> $HOST" && "$(command -v nuclei || echo \"$BIN_DIR/nuclei\")" -l "$NUC_TARGETS" -o "$NUC_OUT" -json
+  fi
+}
