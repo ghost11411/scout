@@ -227,7 +227,7 @@ ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
 
 # ---------------- VERIFY INSTALL ----------------
 VERIFY_INSTALL() {
-  echo -e "\n${BOLD}${BLUE}Verifying installation integrity...${RESET}"
+  INFO "Verifying installation integrity..."
   local ERRORS=0
   for PAIR in "${GO_TOOLS[@]}"; do
     NAME="${PAIR%%|*}"
