@@ -138,7 +138,8 @@ if command -v go >/dev/null 2>&1; then
     for PAIR in "${GO_TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
-        RUN_TOOL "Go: $NAME" go install -trimpath "$PKG"
+        INFO "Go: $NAME" 
+        go install -trimpath "$PKG"
     done
 else
     WARN "Go not found – skipping Go tools"
