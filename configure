@@ -69,8 +69,8 @@ done
 
 BANNER
 
-# ---------------- ROOT CHECK ----------------
-(( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
+# # ---------------- ROOT CHECK ----------------
+# (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
 
 # ---------------- UNINSTALL ----------------
 if $UNINSTALL; then

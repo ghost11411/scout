@@ -10,13 +10,8 @@ OK()   { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
 INFO() { printf "${BLUE}[i] %s${RESET}\n" "$1"; }
 ERR()  { printf "${RED}[✘] %s${RESET}\n" "$1"; }
 
-# ---------------- CHECK ROOT ----------------
-CHECK_ROOT(){
-  if [ "$EUID" -ne 0 ]; then
-  ERR "Please run as root"
-  exit 1
-fi
-}
+# # ---------------- ROOT CHECK ----------------
+# (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
 
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
 VER="v0.1"

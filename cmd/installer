@@ -115,8 +115,8 @@ STOP_SPINNER(){
     return $TIME
 }
 
-# ---------------- ROOT CHECK ----------------
-(( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
+# # ---------------- ROOT CHECK ----------------
+# (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
 
 # ---------------- CONTINUE INSTALL ----------------
 INFO "Setting up directories and tools..."
