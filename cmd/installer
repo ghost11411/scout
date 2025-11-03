@@ -68,10 +68,8 @@ ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
 
 RUN_TOOL() {
     local func="$1"
-        echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds" | unew -a $RESUMELOGFILE
-    else
-        $func
-    fi
+    echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds"
+    $func
 }
 
 # Function to handle CLEANUP on Ctrl+C
