@@ -107,7 +107,7 @@ Examples:
 Flags:
   -h, --help         Show this help
   -v, --version      Show version information
-  --install [action] Run installer (actions: update | force)
+  install [action]   Run installer (actions: update | force)
 EOF
   exit 0
 }
@@ -139,44 +139,41 @@ while [[ $# -gt 0 ]]; do
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -o requires a directory name."; USAGE; }
       CUSTOM_OUTPUT="$2"; shift 2;;
     install)
-        # CONFIGURE="${INSTALL_DIR}/configure"
-        # [[ ! -f "$CONFIGURE" ]] && CONFIGURE="./configure"
+        CONFIGURE="${INSTALL_DIR}/configure"
+        [[ ! -f "$CONFIGURE" ]] && CONFIGURE="./configure"
 
-        # no args = default install
-        if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+        ACTION="${2:-}"
+
+        # no action provided
+        if [[ -z "$ACTION" || "$ACTION" == "-"* ]]; then
             INFO "Running default installation..."
-            curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash
-            # bash "$CONFIGURE"
+            bash "$CONFIGURE"
             exit 0
         fi
 
-        case "$2" in
+        case "$ACTION" in
             --force|-f)
                 INFO "Running forced reinstallation..."
-                curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash -s -- --force
-                # bash "$CONFIGURE" --force
+                bash "$CONFIGURE" --force
                 exit 0
                 ;;
             --update|-up)
                 INFO "Running update..."
-                curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash -s -- --update
-                # bash "$CONFIGURE" --update
+                bash "$CONFIGURE" --update
                 exit 0
                 ;;
             --uninstall|-un)
                 INFO "Running uninstallation..."
-                [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
-                [[ -L /usr/local/bin/scout ]] && rm -f /usr/local/bin/scout && OK "Removed symlink"
-                OK "Uninstalled successfully."
-                # bash "$CONFIGURE" --uninstall
+                bash "$CONFIGURE" --uninstall
                 exit 0
                 ;;
             *)
-                ERR "Unknown install action: $2"
+                ERR "Unknown install action: $ACTION"
                 USAGE
                 ;;
         esac
         ;;
+
     -h|--help) USAGE ;;
     -v|--version)
       echo -e "${BOLD}Version:${RESET} ${VER}"
