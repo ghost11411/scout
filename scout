@@ -6,9 +6,10 @@ IFS=$'\n\t'
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- LOGGING ----------------
-OK()   { printf "${GREEN}[✔] %s${RESET}\n" "$1"; }
-INFO() { printf "${BLUE}[i] %s${RESET}\n" "$1"; }
-ERR()  { printf "${RED}[✘] %s${RESET}\n" "$1"; }
+OK()      { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
 
 # # ---------------- ROOT CHECK ----------------
 # (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
@@ -20,10 +21,6 @@ TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
 WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
 WORKSPACE_DIR="${INSTALL_DIR}/workspace"
-LOG_FILE="/tmp/scout_install_failed.log"
-: > "$LOG_FILE"
-
-DEBUG=0
 
 # scanner rate/delay defaults (conservative)
 NAABU_RATE=150
@@ -94,12 +91,19 @@ EOF
   exit 0
 }
 
+CHECK_ROOT(){
+  if (( EUID != 0 )); then
+    WARN "Not running as root; some steps may require sudo."
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d)
       # require an argument that is not another flag
       if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
         BANNER
+        CHECK_ROOT
         ERR "Option -d requires a domain argument."
         USAGE
       fi
@@ -109,6 +113,7 @@ while [[ $# -gt 0 ]]; do
       # require an argument that is not another flag
       if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
         BANNER
+        CHECK_ROOT
         ERR "Option -f requires a file path argument."
         USAGE
       fi
@@ -117,6 +122,7 @@ while [[ $# -gt 0 ]]; do
     -o)
       if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
         BANNER
+        CHECK_ROOT
         ERR "Option -o requires a directory name."
         USAGE
       fi

@@ -6,7 +6,7 @@ IFS=$' \t\n'
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- VARIABLES ----------------
-VER="v0.1"
+VER="v0.2"
 REPO_URL="https://github.com/ghost11411/scout"
 INSTALL_DIR="${HOME}/scout"
 FORCE=false
@@ -31,23 +31,53 @@ EOF
   while IFS= read -r LINE; do
     for ((i=0;i<${#LINE};i++)); do
       printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0005
+      sleep 0.0003
     done
     printf "\n"
   done <<< "$ASCII_SCOUT"
   for ((i=0;i<${#TAGLINE};i++)); do
     printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.001
+    sleep 0.0007
   done
   printf "\n\n"
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
 # ---------------- LOGGING ----------------
-OK()      { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
-INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
-WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
+OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
+INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
+
+# ---------------- CLEAN EXIT ----------------
+trap 'ERR "Installation interrupted"; exit 1' INT TERM
+
+# ---------------- DEP CHECK ----------------
+check_deps() {
+  for cmd in git curl; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      ERR "Missing dependency: $cmd"
+      exit 1
+    fi
+  done
+}
+
+# ---------------- ROOT CHECK (Optional) ----------------
+root_warn() {
+  (( EUID != 0 )) && WARN "Not running as root; sudo may be required for symlink creation."
+}
+
+# ---------------- HELP ----------------
+usage() {
+cat <<EOF
+Usage: configure [--force] [--update] [--uninstall] [--version]
+  --force       Remove and reinstall
+  --update      Pull latest changes
+  --uninstall   Remove everything
+  --version     Show installer version
+  --help, -h    Show this help
+EOF
+}
 
 # ---------------- PARSE FLAGS ----------------
 for ARG in "$@"; do
@@ -55,68 +85,67 @@ for ARG in "$@"; do
         --force) FORCE=true ;;
         --update) UPDATE=true ;;
         --uninstall) UNINSTALL=true ;;
-        --help|-h)
-            cat <<EOF
-Usage: configure [--force] [--update] [--uninstall]
-  --force     Remove and reinstall
-  --update    Pull latest changes
-  --uninstall Remove everything
-EOF
-            exit 0 ;;
-        *) ERR "Unknown option: $ARG"; exit 1 ;;
+        --version) echo "Scout Installer ${VER}"; exit 0 ;;
+        --help|-h) usage; exit 0 ;;
+        *) ERR "Unknown option: $ARG"; usage; exit 1 ;;
     esac
 done
 
+# ---------------- MAIN ----------------
 BANNER
-
-# # ---------------- ROOT CHECK ----------------
-# (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
+check_deps
+root_warn
 
 # ---------------- UNINSTALL ----------------
 if $UNINSTALL; then
     INFO "Uninstalling..."
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
-    [[ -L /usr/local/bin/scout ]] && rm -f /usr/local/bin/scout && OK "Removed symlink"
-    OK "Uninstalled"
+    [[ -L /usr/local/bin/scout ]] && sudo rm -f /usr/local/bin/scout && OK "Removed symlink"
+    OK "Uninstalled successfully."
     exit 0
 fi
 
-# ---------------- FORCE ----------------
+# ---------------- FORCE INSTALL ----------------
 if $FORCE; then
-    WARN "--force: Removing Old Install"
-    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Old Install Removed"
-    INFO "Cloning Fresh Repository..."
-    if git clone "$REPO_URL" "$INSTALL_DIR" > /dev/null 2>&1; then
-        OK "Repository Cloned"
-        INFO "Running Installer..."
-        chmod -R +x "$INSTALL_DIR/cmd/"
-        $INSTALL_DIR/cmd/installer 
-    else
-        ERR "Clone Failed"
-        exit 1
-    fi
+    WARN "--force: Removing old installation..."
+    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Old install removed"
+    INFO "Cloning fresh repository..."
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress
+    OK "Repository cloned"
+    INFO "Running installer..."
+    chmod -R +x "$INSTALL_DIR/cmd/"
+    bash "$INSTALL_DIR/cmd/installer"
+    OK "Installation complete."
 # ---------------- UPDATE ----------------
 elif $UPDATE; then
     if [[ -d "$INSTALL_DIR/.git" ]]; then
-        INFO "Updating Existing Install..."
-        (cd "$INSTALL_DIR" && git reset --hard && git pull --rebase --autostash) > /dev/null 2>&1 && OK "Updated" || WARN "Update failed"
-        INFO "Running Installer..."
+        INFO "Updating existing install..."
+        (cd "$INSTALL_DIR" && git reset --hard && git pull --rebase --autostash)
+        OK "Repository updated"
+        INFO "Running installer..."
         chmod -R +x "$INSTALL_DIR/cmd/"
-        $INSTALL_DIR/cmd/installer
+        bash "$INSTALL_DIR/cmd/installer"
+        OK "Update complete."
     else
-        WARN "$INSTALL_DIR is not a git repo – skipping update use --force to reinstall"
+        WARN "$INSTALL_DIR is not a git repo – use --force to reinstall."
     fi
-# ---------------- DEFAULT (no flags) ----------------
+# ---------------- DEFAULT INSTALL ----------------
 else
-    [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR exists. Use --force or --update."; exit 1; }
-    INFO "Fresh Install – Cloning Repository..."
-    if git clone "$REPO_URL" "$INSTALL_DIR" > /dev/null 2>&1; then
-        OK "Repository Cloned"
-        INFO "Running Installer..."
-        chmod -R +x "$INSTALL_DIR/cmd/"
-        $INSTALL_DIR/cmd/installer 
-    else
-        ERR "Clone Failed"
-        exit 1
-    fi
+    [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR already exists. Use --force or --update."; exit 1; }
+    INFO "Fresh install – cloning repository..."
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress
+    OK "Repository cloned"
+    INFO "Running installer..."
+    chmod -R +x "$INSTALL_DIR/cmd/"
+    bash "$INSTALL_DIR/cmd/installer"
+    OK "Installation complete."
+fi
+
+# ---------------- SYMLINK CREATION ----------------
+if [[ ! -L /usr/local/bin/scout ]]; then
+  if sudo ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout 2>/dev/null; then
+    OK "Created symlink at /usr/local/bin/scout"
+  else
+    WARN "Failed to create symlink; run manually with: sudo ln -s ${INSTALL_DIR}/scout /usr/local/bin/scout"
+  fi
 fi

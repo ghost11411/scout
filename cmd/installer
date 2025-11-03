@@ -64,7 +64,7 @@ WORDLISTS=(
 OK()      { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
 INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
+ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
 
 # RUN_TOOL() {
 #     local func="$1"
@@ -115,8 +115,9 @@ STOP_SPINNER(){
     return $TIME
 }
 
-# # ---------------- ROOT CHECK ----------------
-# (( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
+if (( EUID != 0 )); then
+  WARN "Not running as root; some steps may require sudo."
+fi
 
 # ---------------- CONTINUE INSTALL ----------------
 INFO "Setting up directories and tools..."
