@@ -103,11 +103,15 @@ REQUIRE_ROOT() {
 # ---------------- MAIN INSTALL ----------------
 REQUIRE_ROOT "$@"
 
+# ---------------- PREPARE DIRECTORIES ----------------
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Setting up directories and tools..."
 mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
 find "$INSTALL_DIR" -type f -exec chmod +x {} + || true
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 
 # ---------------- APT INSTALL WITH SPINNER ----------------
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Installing and Updating APT packages..."
 START_SPINNER "Installing APT packages"
 {
@@ -115,8 +119,10 @@ START_SPINNER "Installing APT packages"
 } > /dev/null 2>&1
 STOP_SPINNER
 OK "APT packages installed in (${ELAPSED}s)"
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 
 # ---------------- GO INSTALL WITH SPINNER ----------------
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"v
 if command -v go >/dev/null 2>&1; then
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:$PATH"
@@ -173,9 +179,9 @@ INSTALL_SUBLIST3R() {
   START_SPINNER "Installing Sublist3r"
   START=$(date +%s)
 
-  git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" "Sublist3r" 2>/dev/null || true
+  git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" "Sublist3r" || true
   if [[ -d "$SUBLISTER_DIR" ]]; then
-    if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages 2>/dev/null; then
+    if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages; then
       STATUS="success"
     else
       STATUS="fail"
@@ -195,13 +201,19 @@ INSTALL_SUBLIST3R() {
   fi
 }
 INSTALL_SUBLIST3R
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+echo ""
 
 # ---- CLONE GIT REPOS ----
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Cloning GF patterns..."
 git clone "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" "GF-Patterns" 2>/dev/null || true
 OK "GF patterns ready"
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+echo ""
 
 # ---- WORDLISTS ----
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Downloading Wordlists..."
 for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
@@ -211,11 +223,16 @@ for URL in "${WORDLISTS[@]}"; do
     WARN "$FNAME Download Failed"
   fi
 done
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+echo ""
 
+# ---------------- PERMISSIONS & SYMLINKS ----------------
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Setting Permissions and Symlinks..."
 find "$BIN_DIR" -type f -exec chmod 755 {} +
 chmod +x "$INSTALL_DIR/scout" 2>/dev/null || true
 ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 
 # ---------------- VERIFY INSTALL ----------------
 VERIFY_INSTALL() {
@@ -235,6 +252,7 @@ VERIFY_INSTALL() {
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)
