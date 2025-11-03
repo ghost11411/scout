@@ -68,7 +68,6 @@ ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
 
 RUN_TOOL() {
     local func="$1"
-    if is_excluded "$func"; then
         echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds" | unew -a $RESUMELOGFILE
     else
         $func
