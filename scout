@@ -144,13 +144,6 @@ while [[ $# -gt 0 ]]; do
 
         ACTION="${2:-}"
 
-        # no action provided
-        if [[ -z "$ACTION" || "$ACTION" == "-"* ]]; then
-            INFO "Running default installation..."
-            bash "$CONFIGURE"
-            exit 0
-        fi
-
         case "$ACTION" in
             --force|-f)
                 INFO "Running forced reinstallation..."
@@ -168,8 +161,9 @@ while [[ $# -gt 0 ]]; do
                 exit 0
                 ;;
             *)
-                ERR "Unknown install action: $ACTION"
-                USAGE
+                INFO "Running default installation..."
+                bash "$CONFIGURE"
+                exit 0
                 ;;
         esac
         ;;
