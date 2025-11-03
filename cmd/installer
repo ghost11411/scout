@@ -23,8 +23,6 @@ INSTALL_DIR="${HOME}/scout"
 FORCE=false
 UPDATE=false
 UNINSTALL=false
-LOG_FILE="/tmp/scout_temp_configure.log"
-: > "$LOG_FILE"
 
 TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"

@@ -89,6 +89,7 @@ if $FORCE; then
     if git clone "$REPO_URL" "$INSTALL_DIR" > /dev/null 2>&1; then
         OK "Repository Cloned"
         INFO "Running Installer..."
+        chmod -R +x "$INSTALL_DIR/cmd/"
         $INSTALL_DIR/cmd/installer 
     else
         ERR "Clone Failed"
@@ -100,6 +101,7 @@ elif $UPDATE; then
         INFO "Updating Existing Install..."
         (cd "$INSTALL_DIR" && git reset --hard && git pull --rebase --autostash) > /dev/null 2>&1 && OK "Updated" || WARN "Update failed"
         INFO "Running Installer..."
+        chmod -R +x "$INSTALL_DIR/cmd/"
         $INSTALL_DIR/cmd/installer
     else
         WARN "$INSTALL_DIR is not a git repo – skipping update use --force to reinstall"
@@ -111,6 +113,7 @@ else
     if git clone "$REPO_URL" "$INSTALL_DIR" > /dev/null 2>&1; then
         OK "Repository Cloned"
         INFO "Running Installer..."
+        chmod -R +x "$INSTALL_DIR/cmd/"
         $INSTALL_DIR/cmd/installer 
     else
         ERR "Clone Failed"
