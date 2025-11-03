@@ -82,7 +82,7 @@ CLEANUP(){
 trap CLEANUP SIGINT
 
 # ---------------- TRAP ----------------
-trap 'echo -e "\n${RED}[X] Interrupted.${RESET}"; STOP_SPINNER; exit 1' INT
+trap 'echo -e "\n${RED}[X] Interrupted by User.${RESET}"; STOP_SPINNER; exit 1' INT
 
 START_SPINNER(){
     processing="${1}"
