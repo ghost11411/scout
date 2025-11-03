@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- START TIMER ----------------
+START_TIME=$(date +%s)
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# ---------------- COLORS ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
+
+# ---------------- LOGGING ----------------
+OK()      { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
+
+# ---------------- VARIABLES ----------------
+VER="v0.1"
+REPO_URL="https://github.com/ghost11411/scout"
+INSTALL_DIR="${HOME}/scout"
+FORCE=false
+UPDATE=false
+UNINSTALL=false
+LOG_FILE="/tmp/scout_temp_configure.log"
+: > "$LOG_FILE"
+
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
+GF_DIR="$WORDLISTS_DIR/GF-Patterns"
+SUBLISTER_DIR="$BIN_DIR/sublist3r"
+
+APT_PACKAGES=(
+    git whois jq unzip python3 python3-pip python3-requests python3-dnspython parallel gcc curl wget zip python3-shodan make ca-certificates libpcap-dev golang-go
+)
+
+GO_TOOLS=(
+    "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
+    "amass|github.com/owasp-amass/amass/v4/...@master"
+    "assetfinder|github.com/tomnomnom/assetfinder@latest"
+    "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
+    "waybackurls|github.com/tomnomnom/waybackurls@latest"
+    "gau|github.com/lc/gau/v2/cmd/gau@latest"
+    "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
+    "gf|github.com/tomnomnom/gf@latest"
+    "unfurl|github.com/tomnomnom/unfurl@latest"
+    "httprobe|github.com/tomnomnom/httprobe@latest"
+    "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
+    "ffuf|github.com/ffuf/ffuf/v2@latest"
+    "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+    "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+    "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
+)
+
+WORDLISTS=(
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-110000.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/big.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt"
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
+)
+
+# ---------------- LOGGING ----------------
+OK()      { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
+INFO()    { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN()    { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()     { printf "${RED}[X] %s${RESET}\n" "$1" > /dev/null 2>&1; }
+
+RUN_TOOL() {
+    local func="$1"
+    if is_excluded "$func"; then
+        echo -e "${YELLOW}[~] $func${RESET}: 0, ${TIME} seconds" | unew -a $RESUMELOGFILE
+    else
+        $func
+    fi
+}
+
+# Function to handle CLEANUP on Ctrl+C
+CLEANUP(){
+    if [[ -n "$SPINNER_PID" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null
+    fi
+    exit 1
+}
+trap CLEANUP SIGINT
+
+# ---------------- TRAP ----------------
+trap 'echo -e "\n${RED}[X] Interrupted.${RESET}"; STOP_SPINNER; exit 1' INT
+
+START_SPINNER(){
+    processing="${1}"
+    START_TIME=$(date +%s)
+    BRAILLE_STYLE_SPINNER_CHARS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    # SLASH_SPINNER_CHARS=("/" "-" "\\" "|")
+    # ARC_SPINNER_CHARS=("◐" "◓" "◑" "◒")
+    # CLASSIC_DOTS_SPINNER_CHARS=("⠂" "⠒" "⠐" "⠰" "⠴" "⠦" "⠖" "⠒")
+    # ARROW_SPINNER_CHARS=("←" "↖" "↑" "↗" "→" "↘" "↓" "↙")
+    # BOX_SPINNER_CHARS=("▖" "▘" "▝" "▗")
+    # QUARTERS_SPINNER_CHARS=("◴" "◷" "◶" "◵")
+    # CLOCK_SPINNER_CHARS=("🕛" "🕐" "🕑" "🕒" "🕓" "🕔" "🕕" "🕖" "🕗" "🕘" "🕙" "🕚")
+    # EMOJI_SPINNER_CHARS=("🌑" "🌒" "🌓" "🌔" "🌕" "🌖" "🌗" "🌘")
+    # TRAIL_SPINNER_CHARS=("⠁" "⠂" "⠄" "⠂")
+
+    while true; do
+    	ELAPSED=$(( $(date +%s) - START_TIME ))
+        for char in "${BRAILLE_STYLE_SPINNER_CHARS[@]}"; do
+            printf "${YELLOW}[${char}]${RESET} ${processing} ${CYAN}(${ELAPSED} seconds)${RESET} 🔎"
+            printf "                                    \r"
+            sleep 0.05
+        done
+    done &
+    SPINNER_PID=$!
+}
+
+STOP_SPINNER(){
+    kill "${SPINNER_PID}" 2>/dev/null
+    TIME=$(( $(date +%s) - START_TIME ))
+    return $TIME
+}
+
+# ---------------- ROOT CHECK ----------------
+(( EUID != 0 )) && { ERR "Run as Root with sudo"; exit 1; }
+
+# ---------------- CONTINUE INSTALL ----------------
+INFO "Setting up directories and tools..."
+
+RUN_TOOL "Create dirs" mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
+RUN_TOOL "Make executable" find "$INSTALL_DIR" -type f -exec chmod +x {} +
+
+RUN_TOOL "Update APT" apt-get update -y -qq
+RUN_TOOL "Install APT packages" apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"
+
+if command -v go >/dev/null 2>&1; then
+    INFO "Installing Go tools..."
+    export GOBIN="$BIN_DIR"
+    export PATH="$GOBIN:$PATH"
+    for PAIR in "${GO_TOOLS[@]}"; do
+        NAME="${PAIR%%|*}"
+        PKG="${PAIR#*|}"
+        RUN_TOOL "Go: $NAME" go install -trimpath "$PKG"
+    done
+else
+    WARN "Go not found – skipping Go tools"
+fi
+
+INSTALL_FINDOMAIN() {
+    local URL="https://github.com/Findomain/Findomain/releases/latest/download/findomain-linux.zip"
+    local TMP=$(mktemp -d)
+    local ZIP="$TMP/findomain.zip"
+
+    if curl -L -s -o "$ZIP" "$URL"; then
+        if unzip -q -o "$ZIP" -d "$BIN_DIR"; then
+            chmod +x "$BIN_DIR/findomain" > /dev/null 2>&1 || true
+            OK "Findomain installed"
+        else
+            WARN "Unzip failed"
+        fi
+    else
+        WARN "Download failed"
+    fi
+    rm -rf "$TMP"
+}
+RUN_TOOL "Findomain" INSTALL_FINDOMAIN
+
+clone_or_update() {
+    local URL="$1" DIR="$2" NAME="$3"
+    if [[ -d "$DIR/.git" ]]; then
+        INFO "Updating $NAME..."
+        (cd "$DIR" && git pull --rebase --autostash) > /dev/null 2>&1 && OK "$NAME updated" || WARN "Update failed"
+    else
+        INFO "Cloning $NAME..."
+        git clone "$URL" "$DIR" > /dev/null 2>&1 && OK "$NAME cloned" || WARN "Clone failed"
+    fi
+}
+clone_or_update "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" "GF-Patterns"
+clone_or_update "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" "Sublist3r"
+
+INFO "Downloading Wordlists..."
+for URL in "${WORDLISTS[@]}"; do
+    FNAME=$(basename "$URL")
+    RUN_TOOL "Wordlist: $FNAME" curl -L -s -o "$WORDLISTS_DIR/$FNAME" "$URL"
+done
+
+RUN_TOOL "Make binaries executable" find "$BIN_DIR" -type f -exec chmod 755 {} +
+RUN_TOOL "Make scout executable" chmod +x "$INSTALL_DIR/scout"
+RUN_TOOL "Create symlink" ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+
+# ---------------- FINAL ----------------
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+INFO "Done in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
+
+OK "Scout is ready!"
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+echo -e "Run: ${BOLD}${CYAN}scout${RESET} or ${BOLD}${CYAN}scout --help${RESET}"
+echo -e "GitHub: ${BOLD}${CYAN}${REPO_URL}${RESET}"
+echo -e "${CYAN}${BOLD}Happy Hacking!${RESET} Search"
+exit 0
