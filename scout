@@ -23,15 +23,12 @@ UPDATE=0
 UNINSTALL=0
 
 # scanner rate/delay defaults (conservative)
-NAABU_RATE=150
-MASSCAN_RATE=300
-NMAP_TPS=50
-FFUF_CONCURRENCY=50
 FFUF_WORDLISTS=(
-  "/usr/share/wordlists/dirb/common.txt"
-  "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt"
-  "/usr/share/wordlists/raft-large-directories.txt"
-  "/usr/share/wordlists/ffuf/wordlist.txt"
+  "$WORDLISTS_DIR/big.txt"
+  "$WORDLISTS_DIR/common.txt"
+  "$WORDLISTS_DIR/raft-large-directories.txt"
+  "$WORDLISTS_DIR/raft-large-files.txt"
+  "$WORDLISTS_DIR/subdomains-top1million-110000.txt"
 )
 
 # ---------------- ARGS ----------------
@@ -261,6 +258,10 @@ fi
 # ---------------- BUILD TARGETS ----------------
 TARGETS_FILE="$OUTPUT_DIR/targets.txt"
 : > "$TARGETS_FILE"
+INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
+: > "$INPUT_DOMAIN_ALL_FILE"
+INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+: > "$INPUT_WILDCARD_ALL_FILE"
 
 _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
 
@@ -268,37 +269,35 @@ if [[ -n "$INPUT_DOMAIN" ]]; then
   IFS=',' read -ra D_ARR <<< "$INPUT_DOMAIN"
   for d in "${D_ARR[@]}"; do
     d=$(_trim "$d")
-    [[ -n "$d" ]] && printf '%s\n' "$d" >> "$TARGETS_FILE"
+    [[ -n "$d" ]] && printf '%s\n' "$d" >> "$INPUT_DOMAIN_ALL_FILE"
   done
 fi
 
 if [[ -n "$INPUT_DOMAIN_FILE" ]]; then
   [[ ! -r "$INPUT_DOMAIN_FILE" ]] && { ERR "Cannot read domain file: $INPUT_DOMAIN_FILE"; exit 1; }
-  awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$TARGETS_FILE"
+  awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$INPUT_DOMAIN_ALL_FILE"
 fi
 
 if [[ -n "$INPUT_WILDCARD" ]]; then
   IFS=',' read -ra W_ARR <<< "$INPUT_WILDCARD"
   for w in "${W_ARR[@]}"; do
     w=$(_trim "$w")
-    [[ -n "$w" ]] && printf '%s\n' "$w" >> "$TARGETS_FILE"
+    [[ -n "$w" ]] && printf '%s\n' "$w" >> "$INPUT_WILDCARD_ALL_FILE"
   done
 fi
 
 if [[ -n "$INPUT_WILDCARD_FILE" ]]; then
   [[ ! -r "$INPUT_WILDCARD_FILE" ]] && { ERR "Cannot read wildcard file: $INPUT_WILDCARD_FILE"; exit 1; }
-  awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$TARGETS_FILE"
+  awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
 fi
 
-awk '!seen[$0]++' "$TARGETS_FILE" > "${TARGETS_FILE}.uniq" && mv "${TARGETS_FILE}.uniq" "$TARGETS_FILE"
+cat "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$INPUT_DOMAIN_ALL_FILE"
+cat "$INPUT_WILDCARD_ALL_FILE" | sort -u > "$INPUT_WILDCARD_ALL_FILE"
 
 # ---------------- SUMMARY ----------------
-SCAN_MODE="Mixed"
-echo -e "${BOLD}${CYAN}"
-echo "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
-echo -e "${RESET}${BOLD}Mode:${RESET} ${SCAN_MODE}"
-echo -e "${BOLD}Targets:${RESET}"
-head -n 10 "$TARGETS_FILE" || true
+INFO "${BOLD}${CYAN}"
+INFO "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
+INFO "Domains:" $(head -n 10 $TARGETS_FILE) || true
 TOTAL=$(wc -l < "$TARGETS_FILE" || echo 0)
 (( TOTAL > 10 )) && echo "  ... +$((TOTAL - 10)) more"
 echo -e "${BOLD}Output Directory:${RESET} $OUTPUT_DIR"
