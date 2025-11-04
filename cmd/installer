@@ -176,7 +176,7 @@ INSTALL_FINDOMAIN
 INSTALL_SUBLIST3R() {
   START_SPINNER "Installing Sublist3r"
   START=$(date +%s)
-  if [[ -d "$SUBLISTER_DIR" ]]; then
+  if [[ ! -d "$SUBLISTER_DIR" ]]; then
     git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" || true
     if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages; then
       STATUS="success"
