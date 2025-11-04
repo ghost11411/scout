@@ -136,30 +136,30 @@ while [[ $# -gt 0 ]]; do
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -o requires a directory name."; USAGE; }
       CUSTOM_OUTPUT="$2"; shift 2;;
     install)
-        INSTALLER="${INSTALL_DIR}/configure"
-        [[ ! -f "$INSTALLER" ]] && INSTALLER="./configure"
+        CONFIGURE="${INSTALL_DIR}/configure"
+        [[ ! -f "$CONFIGURE" ]] && CONFIGURE="./configure"
 
         ACTION="${2:-}"
 
         case "$ACTION" in
             --force)
                 INFO "Running forced reinstallation..."
-                bash "$INSTALLER" --force
+                bash "$CONFIGURE" --force
                 exit 0
                 ;;
             --update)
                 INFO "Running update..."
-                bash "$INSTALLER" --update
+                bash "$CONFIGURE" --update
                 exit 0
                 ;;
             --uninstall)
                 INFO "Running uninstallation..."
-                bash "$INSTALLER" --uninstall
+                bash "$CONFIGURE" --uninstall
                 exit 0
                 ;;
             *)
                 INFO "Running default installation..."
-                bash "$INSTALLER"
+                bash "$CONFIGURE"
                 exit 0
                 ;;
         esac
