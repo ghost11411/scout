@@ -142,17 +142,17 @@ while [[ $# -gt 0 ]]; do
         ACTION="${2:-}"
 
         case "$ACTION" in
-            --force|-f)
+            --force)
                 INFO "Running forced reinstallation..."
                 bash "$INSTALLER" --force
                 exit 0
                 ;;
-            --update|-up)
+            --update)
                 INFO "Running update..."
                 bash "$INSTALLER" --update
                 exit 0
                 ;;
-            --uninstall|-un)
+            --uninstall)
                 INFO "Running uninstallation..."
                 bash "$INSTALLER" --uninstall
                 exit 0
@@ -242,13 +242,6 @@ CHECK_BINS(){
   OK "All required tools found"
 }
 
-PICK_WORDLIST(){
-  for w in "${FFUF_WORDLISTS[@]}"; do
-    [[ -f "$w" ]] && { echo "$w"; return; }
-  done
-  echo ""
-}
-
 # ---------------- INPUT VALIDATION ----------------
 if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -z "$INPUT_WILDCARD_FILE" ]]; then
   ERR "No input provided. Use -dd, -df, -wd, or -wf."
@@ -295,11 +288,17 @@ cat "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$INPUT_DOMAIN_ALL_FILE"
 cat "$INPUT_WILDCARD_ALL_FILE" | sort -u > "$INPUT_WILDCARD_ALL_FILE"
 
 # ---------------- SUMMARY ----------------
-INFO "${BOLD}${CYAN}"
-INFO "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
-INFO "Domains:" $(head -n 10 $TARGETS_FILE) || true
-TOTAL=$(wc -l < "$TARGETS_FILE" || echo 0)
-(( TOTAL > 10 )) && echo "  ... +$((TOTAL - 10)) more"
+echo -e "${BOLD}${CYAN}"
+echo -e "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
+if [[ -s "$INPUT_DOMAIN_ALL_FILE" ]]; then
+  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE")"
+fi
+if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
+  INFO "Wildcard domains to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE")"
+fi
+INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
+INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
+echo -e "${RESET}"
 echo -e "${BOLD}Output Directory:${RESET} $OUTPUT_DIR"
 echo -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
@@ -318,7 +317,7 @@ CMDS_DIR="./cmd"
 
 SOURCE_CMD() {
   local func="$1"
-  local script="${CMDS_DIR}/${func}.sh"
+  local script="${CMDS_DIR}/${func}"
   if [[ -f "$script" ]]; then
     source "$script"
     OK "Loaded ${script}"
