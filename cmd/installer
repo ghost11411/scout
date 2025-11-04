@@ -242,12 +242,12 @@ VERIFY_INSTALL() {
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL
-echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+OK "====================================================="
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
-echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+OK "====================================================="
 INFO "Installation Done in $(printf '%02d:%02d:%02d' $((ELAPSED/3600)) $(((ELAPSED/60)%60)) $((ELAPSED%60)))"
 OK "Scout is ready!"
 OK "Installed at: ${INSTALL_DIR}"
@@ -255,8 +255,9 @@ OK "Tools directory: ${TOOLS_DIR}"
 OK "Wordlists directory: ${WORDLISTS_DIR}"
 OK "Binaries directory: ${BIN_DIR}"
 OK "Run 'scout --help' for usage information"
-echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+OK "====================================================="
 echo -e "Run: ${BOLD}${CYAN}scout${RESET} or ${BOLD}${CYAN}scout --help${RESET}"
 echo -e "GitHub: ${BOLD}${CYAN}${REPO_URL}${RESET}"
+OK "Installation complete."
 echo -e "${CYAN}${BOLD}Happy Hacking!${RESET}"
 exit 0

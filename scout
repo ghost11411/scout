@@ -12,7 +12,7 @@ WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
 
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
-VER="v0.2"
+VER="v0.1"
 INSTALL_DIR="${HOME}/scout"
 TOOLS_DIR="${INSTALL_DIR}/tools"
 BIN_DIR="${TOOLS_DIR}/bin"
@@ -136,30 +136,30 @@ while [[ $# -gt 0 ]]; do
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -o requires a directory name."; USAGE; }
       CUSTOM_OUTPUT="$2"; shift 2;;
     install)
-        CONFIGURE="${INSTALL_DIR}/configure"
-        [[ ! -f "$CONFIGURE" ]] && CONFIGURE="./configure"
+        INSTALLER="${INSTALL_DIR}/cmd/installer"
+        [[ ! -f "$INSTALLER" ]] && INSTALLER="./cmd/installer"
 
         ACTION="${2:-}"
 
         case "$ACTION" in
             --force|-f)
                 INFO "Running forced reinstallation..."
-                bash "$CONFIGURE" --force
+                bash "$INSTALLER" --force
                 exit 0
                 ;;
             --update|-up)
                 INFO "Running update..."
-                bash "$CONFIGURE" --update
+                bash "$INSTALLER" --update
                 exit 0
                 ;;
             --uninstall|-un)
                 INFO "Running uninstallation..."
-                bash "$CONFIGURE" --uninstall
+                bash "$INSTALLER" --uninstall
                 exit 0
                 ;;
             *)
                 INFO "Running default installation..."
-                bash "$CONFIGURE"
+                bash "$INSTALLER"
                 exit 0
                 ;;
         esac

@@ -146,5 +146,4 @@ else
     INFO "Running installer..."
     chmod -R +x "$INSTALL_DIR/cmd/"
     bash "$INSTALL_DIR/cmd/installer"
-    OK "Installation complete."
 fi
