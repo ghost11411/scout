@@ -177,7 +177,7 @@ INSTALL_SUBLIST3R() {
   START_SPINNER "Installing Sublist3r"
   START=$(date +%s)
   if [[ ! -d "$SUBLISTER_DIR" ]]; then
-    git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" || true
+    git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" > /dev/null 2>&1 || true
     if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages; then
       STATUS="success"
     else
@@ -202,7 +202,7 @@ INSTALL_SUBLIST3R
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Cloning GF patterns..."
-git clone "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" "GF-Patterns" > /dev/null 2>&1
+git clone "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" > /dev/null 2>&1 || true
 OK "GF patterns ready"
 
 # ---- WORDLISTS ----
