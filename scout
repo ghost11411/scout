@@ -327,8 +327,8 @@ SOURCE_CMD() {
   fi
 }
 
-SOURCE_CMD "COLLECT_SUBDOMAINS"
-SOURCE_CMD "COLLECT_LIVE"
+SOURCE_CMD "collect_subdomains"
+SOURCE_CMD "collect_live"
 # SOURCE_CMD "collect_js"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
