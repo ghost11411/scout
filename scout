@@ -313,7 +313,7 @@ echo -e "${BOLD}${CYAN}───────────────────
 sleep 1
 
 # ---------------- LOAD EXTERNAL COMMANDS ----------------
-CMDS_DIR="./cmd"
+CMDS_DIR="${INSTALL_DIR}/cmd"
 
 SOURCE_CMD() {
   local func="$1"
