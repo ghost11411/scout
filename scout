@@ -298,9 +298,13 @@ if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
 fi
 INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
 INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
+echo "Input Domain: $INPUT_DOMAIN"
+INFO "Input Domain File: $INPUT_DOMAIN_FILE"
+INFO "Input Wildcards: $INPUT_WILDCARD"
+INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
 echo -e "${RESET}"
-echo -e "${BOLD}Output Directory:${RESET} $OUTPUT_DIR"
-echo -e "${BOLD}Tools Used:${RESET}"
+INFO "${BOLD}Output Directory:${RESET} $OUTPUT_DIR"
+INFO -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
   • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls
   • Live host discovery: dnsx
@@ -334,14 +338,8 @@ SOURCE_CMD "collect_live"
 # SOURCE_CMD "service_scan"
 # SOURCE_CMD "nuclei_scan"
 
-echo "Input Domain: $INPUT_DOMAIN"
-echo "Input Domain File: $INPUT_DOMAIN_FILE"
-echo "Input Wildcards: $INPUT_WILDCARD"
-echo "Input Wildcards File: $INPUT_WILDCARD_FILE"
-
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
-INFO "Output directory: $OUTPUT_DIR"
 CHECK_INTERNET
 CHECK_BINS || true
 
