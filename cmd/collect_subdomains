@@ -14,7 +14,7 @@ COLLECT_SUBDOMAINS(){
     INFO "findomain" && "$BIN_DIR/findomain" -t "$domain" --quiet -u "$RAW_DIR/$domain/findomain.out"
     INFO "gau" && echo "$domain" | "$BIN_DIR/gau" --subs | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/$domain/gau.out"
     INFO "waybackurls" && "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" -u domains >> "$RAW_DIR/$domain/wayback.out"
-    INFO "subdog" && cat "$domain" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/$domain/subdog.out"
+    INFO "subdog" && echo "$domain" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/$domain/subdog.out"
     INFO "xsubfind3r" && "$BIN_DIR/xsubfind3r" -d "$domain" -o "$RAW_DIR/$domain/xsubfind3r.out"
     INFO "cero" && "$BIN_DIR/cero" -d "$domain" | sort -u >> "$RAW_DIR/$domain/cero.out"
     INFO "crt-sh" && curl -sk "https://crt.sh/?q=$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$RAW_DIR/$domain/crt.out"
