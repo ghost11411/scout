@@ -351,8 +351,8 @@ while read -r DOMAIN; do
 
   INFO "Processing target: $DOMAIN"
 
-  collect_subdomains "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
-  collect_live "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+  ${INSTALL_DIR}/cmd/collect_subdomains "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+  ${INSTALL_DIR}/cmd/collect_live "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
 
   HOSTS_FILE="$DOMAIN_OUTPUT_DIR/collected/hosts.txt"
   if [[ ! -s "$HOSTS_FILE" ]]; then
