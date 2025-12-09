@@ -367,7 +367,7 @@ while read -r DOMAIN; do
   #   PORT_SCAN_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
   #   SERVICE_DETECT_NMAP "$HOST" "$DOMAIN_OUTPUT_DIR"
   #   RUN_FFUF_AND_NUCLEI_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
-  # done < "$HOSTS_FILE"
+  done < "$HOSTS_FILE"
 
   OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
 done < "$TARGETS_FILE"
