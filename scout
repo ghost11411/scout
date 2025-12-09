@@ -329,10 +329,10 @@ SOURCE_CMD() {
 
 SOURCE_CMD "collect_subdomains"
 SOURCE_CMD "collect_live"
-SOURCE_CMD "collect_js"
-SOURCE_CMD "port_scan"
-SOURCE_CMD "service_scan"
-SOURCE_CMD "nuclei_scan"
+# SOURCE_CMD "collect_js"
+# SOURCE_CMD "port_scan"
+# SOURCE_CMD "service_scan"
+# SOURCE_CMD "nuclei_scan"
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
@@ -351,8 +351,8 @@ while read -r DOMAIN; do
 
   INFO "Processing target: $DOMAIN"
 
-  COLLECT_SUBDOMAINS "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
-  COLLECT_LIVE "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+  collect_subdomains "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+  collect_live "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
 
   HOSTS_FILE="$DOMAIN_OUTPUT_DIR/collected/hosts.txt"
   if [[ ! -s "$HOSTS_FILE" ]]; then
@@ -360,14 +360,14 @@ while read -r DOMAIN; do
     continue
   fi
 
-  while read -r HOST; do
-    HOST=$(echo "$HOST" | tr -d '[:space:]')
-    [[ -z "$HOST" ]] && continue
-    INFO "Processing host: $HOST"
-    PORT_SCAN_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
-    SERVICE_DETECT_NMAP "$HOST" "$DOMAIN_OUTPUT_DIR"
-    RUN_FFUF_AND_NUCLEI_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
-  done < "$HOSTS_FILE"
+  # while read -r HOST; do
+  #   HOST=$(echo "$HOST" | tr -d '[:space:]')
+  #   [[ -z "$HOST" ]] && continue
+  #   INFO "Processing host: $HOST"
+  #   PORT_SCAN_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
+  #   SERVICE_DETECT_NMAP "$HOST" "$DOMAIN_OUTPUT_DIR"
+  #   RUN_FFUF_AND_NUCLEI_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
+  # done < "$HOSTS_FILE"
 
   OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
 done < "$TARGETS_FILE"
