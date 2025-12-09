@@ -244,13 +244,11 @@ CHECK_BINS(){
 
 # ---------------- INPUT VALIDATION ----------------
 if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -z "$INPUT_WILDCARD_FILE" ]]; then
-  ERR "No input provided. Use -dd, -df, -wd, or -wf."
+  ERR "No input provided. Use -dd, -df, -wd, -wf."
   USAGE
 fi
 
 # ---------------- BUILD TARGETS ----------------
-TARGETS_FILE="$OUTPUT_DIR/targets.txt"
-: > "$TARGETS_FILE"
 INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
 : > "$INPUT_DOMAIN_ALL_FILE"
 INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
@@ -284,31 +282,32 @@ if [[ -n "$INPUT_WILDCARD_FILE" ]]; then
   awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
 fi
 
-cat "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$INPUT_DOMAIN_ALL_FILE"
-cat "$INPUT_WILDCARD_ALL_FILE" | sort -u > "$INPUT_WILDCARD_ALL_FILE"
+sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
+sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
 
 # ---------------- SUMMARY ----------------
-echo -e "${BOLD}${CYAN}"
-echo -e "─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────"
+echo -e "${BOLD}${CYAN}─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────${RESET}"
+INFO "Input Domain: $INPUT_DOMAIN"
+INFO "Input Domain File: $INPUT_DOMAIN_FILE"
+INFO "Input Wildcards: $INPUT_WILDCARD"
+INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
 if [[ -s "$INPUT_DOMAIN_ALL_FILE" ]]; then
   INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE")"
 fi
 if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
   INFO "Wildcard domains to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE")"
 fi
-INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
+echo -e ""
 INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
-echo "Input Domain: $INPUT_DOMAIN"
-INFO "Input Domain File: $INPUT_DOMAIN_FILE"
-INFO "Input Wildcards: $INPUT_WILDCARD"
-INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
+INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
 echo -e "${RESET}"
-INFO "${BOLD}Output Directory:${RESET} $OUTPUT_DIR"
-INFO -e "${BOLD}Tools Used:${RESET}"
+INFO "Output Directory: $OUTPUT_DIR"
+echo -e ""
+echo -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
-  • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls
-  • Live host discovery: dnsx
-  • Port scanning: naabu, masscan
+  • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls, subdog, xsubfind3r
+  • Live host discovery: dnsx, puredns, httpx
+  • Port scanning: naabu
   • Service detection: nmap
   • Directory fuzzing: ffuf
   • Vulnerability scanning: nuclei
@@ -332,7 +331,7 @@ SOURCE_CMD() {
 }
 
 SOURCE_CMD "collect_subdomains"
-SOURCE_CMD "collect_live"
+# SOURCE_CMD "collect_live"
 # SOURCE_CMD "collect_js"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
@@ -355,13 +354,20 @@ while read -r DOMAIN; do
   INFO "Processing target: $DOMAIN"
 
   COLLECT_SUBDOMAINS "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
-  COLLECT_LIVE "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
 
-  HOSTS_FILE="$DOMAIN_OUTPUT_DIR/collected/hosts.txt"
-  if [[ ! -s "$HOSTS_FILE" ]]; then
-    WARN "No live hosts found for $DOMAIN; skipping host scans."
-    continue
-  fi
+  OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
+done < "$INPUT_WILDCARD_ALL_FILE"
+
+OK "All done. Outputs are in: $OUTPUT_DIR"
+# EOF
+
+  # COLLECT_LIVE "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+
+  # HOSTS_FILE="$DOMAIN_OUTPUT_DIR/collected/hosts.txt"
+  # if [[ ! -s "$HOSTS_FILE" ]]; then
+  #   WARN "No live hosts found for $DOMAIN; skipping host scans."
+  #   continue
+  # fi
 
   # while read -r HOST; do
   #   HOST=$(echo "$HOST" | tr -d '[:space:]')
@@ -371,9 +377,3 @@ while read -r DOMAIN; do
   #   SERVICE_DETECT_NMAP "$HOST" "$DOMAIN_OUTPUT_DIR"
   #   RUN_FFUF_AND_NUCLEI_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
   # done < "$HOSTS_FILE"
-
-  OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
-done < "$TARGETS_FILE"
-
-OK "All done. Outputs are in: $OUTPUT_DIR"
-# EOF

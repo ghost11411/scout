@@ -4,7 +4,6 @@ IFS=$' \t\n'
 
 # ---------------- LIVE HOSTS (dnsx) ----------------
 COLLECT_LIVE(){
-  mkdir -p "$COLLECTED_DIR"
   ALL_SUBS_FILE="$RAW_DIR/all_subdomains.out"
   if [[ ! -s "$ALL_SUBS_FILE" ]]; then
     ERR "No subdomains found to resolve"
