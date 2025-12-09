@@ -329,9 +329,10 @@ SOURCE_CMD() {
 
 SOURCE_CMD "collect_subdomains"
 SOURCE_CMD "collect_live"
-SOURCE_CMD "PORT_SCAN_PER_HOST"
-SOURCE_CMD "SERVICE_DETECT_NMAP"
-SOURCE_CMD "RUN_FFUF_AND_NUCLEI_PER_HOST"
+SOURCE_CMD "collect_js"
+SOURCE_CMD "port_scan"
+SOURCE_CMD "service_scan"
+SOURCE_CMD "nuclei_scan"
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
