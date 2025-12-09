@@ -248,11 +248,6 @@ if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -
   USAGE
 fi
 
-echo "Input Domain: $INPUT_DOMAIN"
-echo "Input Domain File: $INPUT_DOMAIN_FILE"
-echo "Input Wildcards: $INPUT_WILDCARD"
-echo "Input Wildcards File: $INPUT_WILDCARD_FILE"
-
 # ---------------- BUILD TARGETS ----------------
 TARGETS_FILE="$OUTPUT_DIR/targets.txt"
 : > "$TARGETS_FILE"
@@ -338,6 +333,11 @@ SOURCE_CMD "collect_live"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
 # SOURCE_CMD "nuclei_scan"
+
+echo "Input Domain: $INPUT_DOMAIN"
+echo "Input Domain File: $INPUT_DOMAIN_FILE"
+echo "Input Wildcards: $INPUT_WILDCARD"
+echo "Input Wildcards File: $INPUT_WILDCARD_FILE"
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
