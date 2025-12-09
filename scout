@@ -336,7 +336,7 @@ SOURCE_CMD "collect_subdomains"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
 # SOURCE_CMD "nuclei_scan"
-
+export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR FFUF_WORDLISTS
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting SCOUT"
 CHECK_INTERNET
@@ -350,7 +350,7 @@ while read -r DOMAIN; do
   SAFE_NAME="${SAFE_NAME//\//_}"
   DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
   mkdir -p "$DOMAIN_OUTPUT_DIR/raw" "$DOMAIN_OUTPUT_DIR/collected"
-
+  export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
   INFO "Processing target: $DOMAIN"
 
   COLLECT_SUBDOMAINS "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
