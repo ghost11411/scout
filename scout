@@ -248,7 +248,10 @@ if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -
   USAGE
 fi
 
-echo $INPUT_DOMAIN $INPUT_DOMAIN_FILE $INPUT_WILDCARD $INPUT_WILDCARD_FILE
+echo "Input Domain: $INPUT_DOMAIN"
+echo "Input Domain File: $INPUT_DOMAIN_FILE"
+echo "Input Wildcards: $INPUT_WILDCARD"
+echo "Input Wildcards File: $INPUT_WILDCARD_FILE"
 
 # ---------------- BUILD TARGETS ----------------
 TARGETS_FILE="$OUTPUT_DIR/targets.txt"
