@@ -249,10 +249,15 @@ if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -
 fi
 
 # ---------------- BUILD TARGETS ----------------
-INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
-: > "$INPUT_DOMAIN_ALL_FILE"
-INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
-: > "$INPUT_WILDCARD_ALL_FILE"
+if [[ -n "$INPUT_DOMAIN" || -n "$INPUT_DOMAIN_FILE" ]]; then
+  INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
+  : > "$INPUT_DOMAIN_ALL_FILE"
+fi
+
+if [[ -n "$INPUT_WILDCARD" || -n "$INPUT_WILDCARD_FILE" ]]; then
+  INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+  : > "$INPUT_WILDCARD_ALL_FILE"
+fi
 
 _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
 
@@ -345,7 +350,6 @@ CHECK_BINS || true
 while read -r DOMAIN; do
   DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
   [[ -z "$DOMAIN" ]] && continue
-
   SAFE_NAME="${DOMAIN//\*/WILDCARD}"
   SAFE_NAME="${SAFE_NAME//\//_}"
   DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
