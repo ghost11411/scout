@@ -9,31 +9,39 @@ COLLECT_SUBDOMAINS(){
     [ -z "$domain" ] && continue
     START_SPINNER "Running Subfinder on $domain"
     # INFO "subfinder running on $domain" && "
-    "$BIN_DIR/subfinder" -d "$domain" -all -silent -o "$RAW_DIR/subfinder.out" >/dev/null
+    "$BIN_DIR/subfinder" -d "$domain" -all -silent -o "$RAW_DIR/subfinder.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Assetfinder on $domain"
-    INFO "assetfinder running on $domain" && echo "$domain" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$RAW_DIR/assetfinder.out" >/dev/null
+    # INFO "assetfinder running on $domain" && 
+    echo "$domain" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$RAW_DIR/assetfinder.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Findomain on $domain"
-    INFO "findomain running on $domain" && "$BIN_DIR/findomain" -t "$domain" --quiet -u "$RAW_DIR/findomain.out" >/dev/null
+    # INFO "findomain running on $domain" && 
+    "$BIN_DIR/findomain" -t "$domain" --quiet -u "$RAW_DIR/findomain.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Gau on $domain"
-    INFO "gau running on $domain" && echo "$domain" | "$BIN_DIR/gau" --subs | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/gau.out" >/dev/null
+    # INFO "gau running on $domain" && 
+    echo "$domain" | "$BIN_DIR/gau" --subs | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/gau.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Waybackurls on $domain"
-    INFO "waybackurls running on $domain" && "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/wayback.out" >/dev/null
+    # INFO "waybackurls running on $domain" && 
+    "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/wayback.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Subdog on $domain"
-    INFO "subdog running on $domain" && echo "$domain" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/subdog.out" >/dev/null
+    # INFO "subdog running on $domain" && 
+    echo "$domain" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/subdog.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Xsubfind3r on $domain"
-    INFO "xsubfind3r running on $domain" && "$BIN_DIR/xsubfind3r" -d "$domain" -o "$RAW_DIR/xsubfind3r.out" >/dev/null
+    # INFO "xsubfind3r running on $domain" && 
+    "$BIN_DIR/xsubfind3r" -d "$domain" -s -o "$RAW_DIR/xsubfind3r.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Cero on $domain"
-    INFO "cero running on $domain" && "$BIN_DIR/cero" -d "$domain" | sort -u >> "$RAW_DIR/cero.out" >/dev/null
+    # INFO "cero running on $domain" && 
+    "$BIN_DIR/cero" -d "$domain" | sort -u >> "$RAW_DIR/cero.out" > /dev/null
     STOP_SPINNER
     START_SPINNER "Running Crt.sh on $domain"
-    INFO "crt-sh running on $domain" && curl -sk "https://crt.sh/?q=$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$RAW_DIR/crt.out" >/dev/null
+    # INFO "crt-sh running on $domain" && 
+    curl -sk "https://crt.sh/?q=$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$RAW_DIR/crt.out" > /dev/null
     STOP_SPINNER
     # START_SPINNER "Running Amass on $domain"
     # INFO "amass" && "$BIN_DIR/amass" enum -d "$domain" -o "$RAW_DIR/amass.out"
@@ -47,8 +55,8 @@ COLLECT_SUBDOMAINS(){
   > "$ALL_SUBS_FILE"
   for f in "$RAW_DIR"/*; do
     [[ -f "$f" ]] || continue
-    cat "$f" >/dev/null || true
-  done | $(command -v unfurl || echo "$BIN_DIR/unfurl") -u domains >/dev/null | sort -u > "$ALL_SUBS_FILE" || true
+    cat "$f" > /dev/null || true
+  done | $(command -v unfurl || echo "$BIN_DIR/unfurl") -u domains > /dev/null | sort -u > "$ALL_SUBS_FILE" || true
   STOP_SPINNER
   OK "Collected all subdomains -> $ALL_SUBS_FILE"
 }
