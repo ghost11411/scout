@@ -57,6 +57,20 @@ COLLECT_SUBDOMAINS(){
     COUNT=$(wc -l < "$RAW_DIR/crt.out" || echo 0)
     OK "crt-sh found: $COUNT subdomains"
     
+    # Sublister
+    START_SPINNER "Running sublist3r on $domain"
+    python3 "$BIN_DIR/sublist3r//sublist3r.py" -d "$domain" -o "$RAW_DIR/sublister.out" > /dev/null 2>&1 || true
+    STOP_SPINNER
+    COUNT=$(wc -l < "$RAW_DIR/sublister.out" || echo 0)
+    OK "sublist3r found: $COUNT subdomains"
+
+    # Shuffle and unique
+    START_SPINNER "Running shuffledns on $domain"
+    "$BIN_DIR/shuffledns" -d "$domain" -mode bruteforce -m "$BIN_DIR/massdns" -t 100 -w "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt -r "$WORDLISTS_DIR/resolvers.txt" -o "$RAW_DIR/shuffledns.out" 2>/dev/null || true
+    STOP_SPINNER
+    COUNT=$(wc -l < "$RAW_DIR/shuffledns.out" || echo 0)
+    OK "shuffledns found: $COUNT subdomains"
+
     # Amass
     # START_SPINNER "Running Amass on $domain"
     # INFO "amass" && "$BIN_DIR/amass" enum -d "$domain" -o "$RAW_DIR/amass.out"

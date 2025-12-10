@@ -52,6 +52,18 @@ WORDLISTS=(
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/big.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
+  "https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt"
+  "https://raw.githubusercontent.com/n0kovo/n0kovo_subdomains/refs/heads/main/n0kovo_subdomains_huge.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/shubs-subdomains.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/dns-Jhaddix.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/fierce-hostlist.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/deepmagic.com-prefixes-top50000.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/bug-bounty-program-subdomains-trickest-inventory.txt"
+  "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/bitquark-subdomains-top100000.txt"
+  "https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt"
+  "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt"
+  "https://raw.githubusercontent.com/progprnv/subgeek/refs/heads/main/subdomains.txt"
+
 )
 
 # ---------------- LOGGING ----------------
@@ -202,6 +214,31 @@ INSTALL_SUBLIST3R() {
 }
 INSTALL_SUBLIST3R
 
+INSTALL_MASSDNS() {
+  START_SPINNER "Installing massdns"
+  START=$(date +%s)
+  git clone https://github.com/blechschmidt/massdns.git "/tmp/massdns" > /dev/null 2>&1 || true
+  cd /tmp/massdns
+  make > /dev/null || true
+  sudo make install > /dev/null || true
+  STOP_SPINNER
+  END=$(date +%s)
+  TIME_TAKEN=$((END - START))
+  cp /tmp/massdns/bin/massdns "$BIN_DIR/"
+  rm -rf /tmp/massdns
+  if command -v massdns >/dev/null 2>&1; then
+    STATUS="success"
+  else
+    STATUS="fail"
+  fi
+  if [[ "$STATUS" == "success" ]]; then
+    OK "massdns installed in (${TIME_TAKEN}s)"
+  else
+    WARN "massdns installation failed (${TIME_TAKEN}s)"
+  fi
+}
+INSTALL_MASSDNS
+
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Cloning GF patterns..."
@@ -210,7 +247,7 @@ OK "GF patterns ready"
 
 # ---- WORDLISTS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-INFO "Downloading Wordlists..."
+INFO "Downloading Wordlists & Resolvers..."
 for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
   if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
@@ -219,6 +256,19 @@ for URL in "${WORDLISTS[@]}"; do
     WARN "$FNAME Download Failed"
   fi
 done
+mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
+mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
+cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
+rm -r "$WORDLISTS_DIR"/*.txt || true
+OK "Combined subdomain wordlist created"
+
+INFO "Downloading DNS Resolvers list..."
+wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
+if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
+  OK "Resolvers list downloaded"
+else
+  WARN "Resolvers list download failed"
+fi
 
 # ---------------- PERMISSIONS & SYMLINKS ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
