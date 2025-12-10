@@ -297,15 +297,22 @@ INFO "Input Domain: $INPUT_DOMAIN"
 INFO "Input Domain File: $INPUT_DOMAIN_FILE"
 INFO "Input Wildcards: $INPUT_WILDCARD"
 INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
+echo -e ""
 if [[ -s "$OUTPUT_DIR/domains_all.txt" ]]; then
-  INFO "Domains to scan from -dd/-df: $(wc -l < "$OUTPUT_DIR/domains_all.txt")"
+  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE")"
+  INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
+else 
+  INFO "No domains to scan from -dd/-df."
 fi
+
 if [[ -s "$OUTPUT_DIR/wildcards_all.txt" ]]; then
-  INFO "Wildcard domains to scan from -wd/-wf: $(wc -l < "$OUTPUT_DIR/wildcards_all.txt")"
+  INFO "Wildcards to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE")"
+  INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
+else 
+  INFO "No wildcard domains to scan from -wd/-wf."
 fi
 echo -e ""
-INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
-INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
+
 echo -e "${RESET}"
 INFO "Output Directory: $OUTPUT_DIR"
 echo -e ""
