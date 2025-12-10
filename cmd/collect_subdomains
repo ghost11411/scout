@@ -35,7 +35,7 @@ COLLECT_SUBDOMAINS(){
     # Gau + unfurl
     START_SPINNER "Running gau on $domain"
     # INFO "gau running on $domain" && 
-    echo "$domain" | "$BIN_DIR/gau" --subs | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/gau.out" 2>/dev/null || true
+    echo "$domain" | "$BIN_DIR/gau" --subs 2>/dev/null | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/gau.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/gau.out" || echo 0)
     OK "gau found: $COUNT subdomains"
@@ -43,9 +43,9 @@ COLLECT_SUBDOMAINS(){
     # Waybackurls + unfurl
     START_SPINNER "Running waybackurls on $domain"
     # INFO "waybackurls running on $domain" && 
-    "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/wayback.out" 2>/dev/null || true
+    "$BIN_DIR/waybackurls" "$domain" | "$BIN_DIR/unfurl" -u domains | sort -u >> "$RAW_DIR/waybackurl.out" 2>/dev/null || true
     STOP_SPINNER
-    COUNT=$(wc -l < "$RAW_DIR/gau.out" || echo 0)
+    COUNT=$(wc -l < "$RAW_DIR/waybackurl.out" || echo 0)
     OK "gau found: $COUNT subdomains"
     
     # Subdog
