@@ -35,6 +35,8 @@ GO_TOOLS=(
   "subdog|github.com/rix4uni/subdog@latest"
   "xsubfind3r|github.com/hueristiq/xsubfind3r/cmd/xsubfind3r@latest"
   "cero|github.com/glebarez/cero@latest"
+  "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest"
+  "github.com/d3mondev/puredns/v2@latest"
   "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
   "gf|github.com/tomnomnom/gf@latest"
   "unfurl|github.com/tomnomnom/unfurl@latest"
