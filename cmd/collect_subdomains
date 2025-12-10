@@ -7,9 +7,9 @@ COLLECT_SUBDOMAINS(){
   while read -r domain; do
     domain=$(echo "$domain" | tr -d '[:space:]')
     [ -z "$domain" ] && continue
-    INFO "Collecting subdomains for $domain"
     START_SPINNER "Running Subfinder on $domain"
-    INFO "subfinder running on $domain" && "$BIN_DIR/subfinder" -d "$domain" -all -silent -o "$RAW_DIR/subfinder.out" >/dev/null
+    # INFO "subfinder running on $domain" && "
+    "$BIN_DIR/subfinder" -d "$domain" -all -silent -o "$RAW_DIR/subfinder.out" >/dev/null
     STOP_SPINNER
     START_SPINNER "Running Assetfinder on $domain"
     INFO "assetfinder running on $domain" && echo "$domain" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$RAW_DIR/assetfinder.out" >/dev/null
