@@ -23,9 +23,9 @@ COLLECT_SUBDOMAINS(){
   # after all tools finished for all domains, combine into single file
   ALL_SUBS_FILE="$RAW_DIR/all_subdomains.out"
   > "$ALL_SUBS_FILE"
-  for d in "$RAW_DIR"/*; do
-    [[ -d "$d" ]] || continue
-    cat "$d"/*.out 2>/dev/null || true
+  for f in "$RAW_DIR"/*; do
+    [[ -f "$f" ]] || continue
+    cat "$f" 2>/dev/null || true
   done | $(command -v unfurl || echo "$BIN_DIR/unfurl") -u domains 2>/dev/null | sort -u > "$ALL_SUBS_FILE" || true
   OK "Collected all subdomains -> $ALL_SUBS_FILE"
 }

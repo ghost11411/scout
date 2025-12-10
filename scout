@@ -310,7 +310,7 @@ INFO "Output Directory: $OUTPUT_DIR"
 echo -e ""
 echo -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
-  • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls, subdog, xsubfind3r
+  • Subdomain enumeration: subfinder, assetfinder, findomain, amass, gau, waybackurls, subdog, xsubfind3r, cero, crt.sh
   • Live host discovery: dnsx, puredns, httpx
   • Port scanning: naabu
   • Service detection: nmap
@@ -354,10 +354,10 @@ while read -r DOMAIN; do
   SAFE_NAME="${SAFE_NAME//\//_}"
   DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
   mkdir -p "$DOMAIN_OUTPUT_DIR/raw" "$DOMAIN_OUTPUT_DIR/collected"
-  export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
+  export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected" "$INPUT_DOMAIN_ALL_FILE" "$INPUT_WILDCARD_ALL_FILE"
   INFO "Processing target: $DOMAIN"
 
-  COLLECT_SUBDOMAINS "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
+  COLLECT_SUBDOMAINS
 
   OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
 done < "$INPUT_WILDCARD_ALL_FILE"
