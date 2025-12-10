@@ -281,22 +281,22 @@ _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]
 
 # ---------------- SUMMARY ----------------
 echo -e "${BOLD}${CYAN}─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────${RESET}"
-INFO "Input Domain: $INPUT_DOMAIN"
-INFO "Input Domain File: $INPUT_DOMAIN_FILE"
-INFO "Input Wildcards: $INPUT_WILDCARD"
-INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
+INFO "Input Domain: $INPUT_DOMAIN || 'None'"
+INFO "Input Domain File: $INPUT_DOMAIN_FILE || 'None'"
+INFO "Input Wildcards: $INPUT_WILDCARD || 'None'"
+INFO "Input Wildcards File: $INPUT_WILDCARD_FILE || 'None'"
 echo -e ""
 if [[ -s "$OUTPUT_DIR/domains_all.txt" ]]; then
-  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE")"
-  INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
+  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" || echo 0)"
+  INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}' || echo 0)"
 else 
   INFO "No domains to scan from -dd/-df."
 fi
 echo -e ""
 
 if [[ -s "$OUTPUT_DIR/wildcards_all.txt" ]]; then
-  INFO "Wildcards to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE")"
-  INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}')"
+  INFO "Wildcards to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" || echo 0)"
+  INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}' || echo 0)"
 else 
   INFO "No wildcard domains to scan from -wd/-wf."
 fi
