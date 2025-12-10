@@ -249,47 +249,71 @@ if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -
 fi
 
 # ---------------- BUILD TARGETS ----------------
-if [[ -n "$INPUT_DOMAIN" || -n "$INPUT_DOMAIN_FILE" ]]; then
-  INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
-  : > "$INPUT_DOMAIN_ALL_FILE"
+# if [[ -n "$INPUT_DOMAIN" || -n "$INPUT_DOMAIN_FILE" ]]; then
+#   INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
+#   : > "$INPUT_DOMAIN_ALL_FILE"
+#   if [[ -n "$INPUT_DOMAIN" ]]; then
+#     IFS=',' read -ra D_ARR <<< "$INPUT_DOMAIN"
+#     for d in "${D_ARR[@]}"; do
+#       d=$(_trim "$d")
+#       [[ -n "$d" ]] && printf '%s\n' "$d" >> "$INPUT_DOMAIN_ALL_FILE"
+#     done
+#     sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
+#   fi
+#   if [[ -n "$INPUT_DOMAIN_FILE" ]]; then
+#     [[ ! -r "$INPUT_DOMAIN_FILE" ]] && { ERR "Cannot read domain file: $INPUT_DOMAIN_FILE"; exit 1; }
+#     awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$INPUT_DOMAIN_ALL_FILE"
+#     sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
+#   fi
+# fi
+
+# if [[ -n "$INPUT_WILDCARD" || -n "$INPUT_WILDCARD_FILE" ]]; then
+#   INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+#   : > "$INPUT_WILDCARD_ALL_FILE"
+#   if [[ -n "$INPUT_WILDCARD" ]]; then
+#     IFS=',' read -ra W_ARR <<< "$INPUT_WILDCARD"
+#     for w in "${W_ARR[@]}"; do
+#       w=$(_trim "$w")
+#       [[ -n "$w" ]] && printf '%s\n' "$w" >> "$INPUT_WILDCARD_ALL_FILE"
+#     done
+#     sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
+#   fi
+#   if [[ -n "$INPUT_WILDCARD_FILE" ]]; then
+#     [[ ! -r "$INPUT_WILDCARD_FILE" ]] && { ERR "Cannot read wildcard file: $INPUT_WILDCARD_FILE"; exit 1; }
+#     awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
+#     sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
+#   fi
+# fi
+
+if [[ -n "${INPUT_DOMAIN:-}" || -n "${INPUT_DOMAIN_FILE:-}" ]]; then
+    INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
+    : > "$INPUT_DOMAIN_ALL_FILE"
+
+    [[ -n "${INPUT_DOMAIN:-}" ]] &&
+        IFS=',' read -ra arr <<< "$INPUT_DOMAIN" &&
+        printf "%s\n" "${arr[@]}" | sed 's/^[ \t]*//;s/[ \t]*$//' >> "$INPUT_DOMAIN_ALL_FILE"
+
+    [[ -n "${INPUT_DOMAIN_FILE:-}" ]] &&
+        awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$INPUT_DOMAIN_ALL_FILE"
+
+    sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
 fi
 
-if [[ -n "$INPUT_WILDCARD" || -n "$INPUT_WILDCARD_FILE" ]]; then
-  INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
-  : > "$INPUT_WILDCARD_ALL_FILE"
+if [[ -n "${INPUT_WILDCARD:-}" || -n "${INPUT_WILDCARD_FILE:-}" ]]; then
+    INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+    : > "$INPUT_WILDCARD_ALL_FILE"
+
+    [[ -n "${INPUT_WILDCARD:-}" ]] &&
+        IFS=',' read -ra arr <<< "$INPUT_WILDCARD" &&
+        printf "%s\n" "${arr[@]}" | sed 's/^[ \t]*//;s/[ \t]*$//' >> "$INPUT_WILDCARD_ALL_FILE"
+
+    [[ -n "${INPUT_WILDCARD_FILE:-}" ]] &&
+        awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
+
+    sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
 fi
 
 _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
-
-if [[ -n "$INPUT_DOMAIN" ]]; then
-  IFS=',' read -ra D_ARR <<< "$INPUT_DOMAIN"
-  for d in "${D_ARR[@]}"; do
-    d=$(_trim "$d")
-    [[ -n "$d" ]] && printf '%s\n' "$d" >> "$INPUT_DOMAIN_ALL_FILE"
-  done
-  sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
-fi
-
-if [[ -n "$INPUT_DOMAIN_FILE" ]]; then
-  [[ ! -r "$INPUT_DOMAIN_FILE" ]] && { ERR "Cannot read domain file: $INPUT_DOMAIN_FILE"; exit 1; }
-  awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$INPUT_DOMAIN_ALL_FILE"
-  sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
-fi
-
-if [[ -n "$INPUT_WILDCARD" ]]; then
-  IFS=',' read -ra W_ARR <<< "$INPUT_WILDCARD"
-  for w in "${W_ARR[@]}"; do
-    w=$(_trim "$w")
-    [[ -n "$w" ]] && printf '%s\n' "$w" >> "$INPUT_WILDCARD_ALL_FILE"
-  done
-  sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
-fi
-
-if [[ -n "$INPUT_WILDCARD_FILE" ]]; then
-  [[ ! -r "$INPUT_WILDCARD_FILE" ]] && { ERR "Cannot read wildcard file: $INPUT_WILDCARD_FILE"; exit 1; }
-  awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
-  sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
-fi
 
 # ---------------- SUMMARY ----------------
 echo -e "${BOLD}${CYAN}─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────${RESET}"
