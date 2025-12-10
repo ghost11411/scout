@@ -252,19 +252,20 @@ for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
   START_SPINNER "Downloading $FNAME"
   if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
+    STOP_SPINNER
     OK "$FNAME Downloaded"
   else
+    STOP_SPINNER
     WARN "$FNAME Download Failed"
   fi
-  STOP_SPINNER
 done
 START_SPINNER "Preparing combined subdomain wordlist..."
 mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
 mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
 cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
 rm -r "$WORDLISTS_DIR"/*.txt || true
-OK "Combined subdomain wordlist created"
 STOP_SPINNER
+OK "Combined subdomain wordlist created"
 
 INFO "Downloading DNS Resolvers list..."
 wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
