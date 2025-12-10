@@ -281,10 +281,10 @@ _trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]
 
 # ---------------- SUMMARY ----------------
 echo -e "${BOLD}${CYAN}─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────${RESET}"
-INFO "Input Domain: $INPUT_DOMAIN || 'None'"
-INFO "Input Domain File: $INPUT_DOMAIN_FILE || 'None'"
-INFO "Input Wildcards: $INPUT_WILDCARD || 'None'"
-INFO "Input Wildcards File: $INPUT_WILDCARD_FILE || 'None'"
+INFO "Input Domain: ${INPUT_DOMAIN:-None}"
+INFO "Input Domain File: ${INPUT_DOMAIN_FILE:-None}"
+INFO "Input Wildcards: ${INPUT_WILDCARD:-None}"
+INFO "Input Wildcards File: ${INPUT_WILDCARD_FILE:-None}"
 echo -e ""
 if [[ -s "$OUTPUT_DIR/domains_all.txt" ]]; then
   INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" || echo 0)"
