@@ -260,7 +260,6 @@ OK "Run 'scout --help' for usage information"
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 echo -e "Run: ${BOLD}${CYAN}scout${RESET} or ${BOLD}${CYAN}scout --help${RESET}"
 echo -e "GitHub: ${BOLD}${CYAN}${REPO_URL}${RESET}"
-OK "Installation complete."
 echo -e "${CYAN}${BOLD}Happy Hacking!${RESET}"
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 exit 0
