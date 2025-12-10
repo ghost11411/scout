@@ -152,7 +152,7 @@ INSTALL_FINDOMAIN() {
   TMP=$(mktemp -d)
   ZIP="$TMP/findomain.zip"
 
-  START_SPINNER "Installing Findomain"
+  START_SPINNER "Installing findomain"
   START=$(date +%s)
 
   if curl -sL -o "$ZIP" "$URL" && unzip -q -o "$ZIP" -d "$BIN_DIR"; then
@@ -166,9 +166,9 @@ INSTALL_FINDOMAIN() {
   TIME_TAKEN=$((END - START))
 
   if [[ "$STATUS" == "success" ]]; then
-    OK "Findomain installed in (${TIME_TAKEN}s)"
+    OK "findomain installed in (${TIME_TAKEN}s)"
   else
-    WARN "Findomain installation failed (${TIME_TAKEN}s)"
+    WARN "findomain installation failed (${TIME_TAKEN}s)"
   fi
 
   rm -rf "$TMP"
@@ -177,7 +177,7 @@ INSTALL_FINDOMAIN
 
 # ---- SUBLIST3R ----
 INSTALL_SUBLIST3R() {
-  START_SPINNER "Installing Sublist3r"
+  START_SPINNER "Installing sublist3r"
   START=$(date +%s)
   if [[ ! -d "$SUBLISTER_DIR" ]]; then
     git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" > /dev/null 2>&1 || true
@@ -195,9 +195,9 @@ INSTALL_SUBLIST3R() {
   TIME_TAKEN=$((END - START))
 
   if [[ "$STATUS" == "success" ]]; then
-    OK "Sublist3r installed in (${TIME_TAKEN}s)"
+    OK "sublist3r installed in (${TIME_TAKEN}s)"
   else
-    WARN "Sublist3r installation failed (${TIME_TAKEN}s)"
+    WARN "sublist3r installation failed (${TIME_TAKEN}s)"
   fi
 }
 INSTALL_SUBLIST3R
