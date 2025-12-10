@@ -354,7 +354,7 @@ while read -r DOMAIN; do
   COLLECT_SUBDOMAINS
   OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
 done < "$INPUT_WILDCARD_ALL_FILE"
-
+echo -e ""
 OK "All done. Outputs are in: $OUTPUT_DIR"
 # EOF
 
