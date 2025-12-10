@@ -247,7 +247,7 @@ OK "GF patterns ready"
 
 # ---- WORDLISTS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-INFO "Downloading Wordlists & Resolvers..."
+START_SPINNER "Downloading Wordlists & Resolvers..."
 for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
   if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
@@ -269,10 +269,11 @@ if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
 else
   WARN "Resolvers list download failed"
 fi
+STOP_SPINNER
 
 # ---------------- PERMISSIONS & SYMLINKS ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-INFO "Setting Permissions and Symlinks..."
+START_SPINNER "Setting Permissions and Symlinks..."
 find "$BIN_DIR" -type f -exec chmod 755 {} +
 chmod +x "$INSTALL_DIR/scout" 2>/dev/null || true
 ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
@@ -295,6 +296,7 @@ VERIFY_INSTALL() {
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL
+STOP_SPINNER
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)
