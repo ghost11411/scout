@@ -329,7 +329,6 @@ SOURCE_CMD() {
     eval "${func}(){ INFO \"${func}: not implemented (stub)\"; }"
   fi
 }
-
 SOURCE_CMD "collect_subdomains"
 # SOURCE_CMD "collect_live"
 # SOURCE_CMD "collect_js"
@@ -342,7 +341,7 @@ export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR FFUF_WORDLISTS
 INFO "Starting Scout"
 CHECK_INTERNET
 CHECK_BINS || true
-
+echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 while read -r DOMAIN; do
   DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
   [[ -z "$DOMAIN" ]] && continue
