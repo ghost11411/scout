@@ -267,6 +267,7 @@ rm -r "$WORDLISTS_DIR"/*.txt || true
 STOP_SPINNER
 OK "Combined subdomain wordlist created"
 
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Downloading DNS Resolvers list..."
 wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
 if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
@@ -292,10 +293,7 @@ VERIFY_INSTALL() {
   done
   [[ -x "$BIN_DIR/findomain" ]] || { WARN "Findomain missing"; ((ERRORS++)); }
   [[ -d "$SUBLISTER_DIR" ]] || { WARN "Sublist3r missing"; ((ERRORS++)); }
-  # for URL in "${WORDLISTS[@]}"; do
-  #   FNAME=$(basename "$URL")
-  #   [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Missing/empty: $FNAME"; ((ERRORS++)); }
-  # done
+  [[ -x "$BIN_DIR/massdns" ]] || { WARN "Massdns missing"; ((ERRORS++)); }
   [[ -L /usr/local/bin/scout && -x /usr/local/bin/scout ]] || { WARN "Symlink missing or not executable"; ((ERRORS++)); }
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
