@@ -297,11 +297,11 @@ INFO "Input Domain: $INPUT_DOMAIN"
 INFO "Input Domain File: $INPUT_DOMAIN_FILE"
 INFO "Input Wildcards: $INPUT_WILDCARD"
 INFO "Input Wildcards File: $INPUT_WILDCARD_FILE"
-if [[ -s "$INPUT_DOMAIN_ALL_FILE" ]]; then
-  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE")"
+if [[ -s "$OUTPUT_DIR/domains_all.txt" ]]; then
+  INFO "Domains to scan from -dd/-df: $(wc -l < "$OUTPUT_DIR/domains_all.txt")"
 fi
-if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
-  INFO "Wildcard domains to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE")"
+if [[ -s "$OUTPUT_DIR/wildcards_all.txt" ]]; then
+  INFO "Wildcard domains to scan from -wd/-wf: $(wc -l < "$OUTPUT_DIR/wildcards_all.txt")"
 fi
 echo -e ""
 INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}')"
