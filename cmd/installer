@@ -247,20 +247,24 @@ OK "GF patterns ready"
 
 # ---- WORDLISTS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-START_SPINNER "Downloading Wordlists & Resolvers..."
+INFO "Downloading Wordlists & Resolvers..."
 for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
+  START_SPINNER "Downloading $FNAME"
   if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
     OK "$FNAME Downloaded"
   else
     WARN "$FNAME Download Failed"
   fi
+  STOP_SPINNER
 done
+START_SPINNER "Preparing combined subdomain wordlist..."
 mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
 mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
 cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
 rm -r "$WORDLISTS_DIR"/*.txt || true
 OK "Combined subdomain wordlist created"
+STOP_SPINNER
 
 INFO "Downloading DNS Resolvers list..."
 wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
@@ -269,11 +273,10 @@ if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
 else
   WARN "Resolvers list download failed"
 fi
-STOP_SPINNER
 
 # ---------------- PERMISSIONS & SYMLINKS ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-START_SPINNER "Setting Permissions and Symlinks..."
+INFO "Setting Permissions and Symlinks..."
 find "$BIN_DIR" -type f -exec chmod 755 {} +
 chmod +x "$INSTALL_DIR/scout" 2>/dev/null || true
 ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
@@ -296,7 +299,6 @@ VERIFY_INSTALL() {
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL
-STOP_SPINNER
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)
