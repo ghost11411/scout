@@ -260,13 +260,13 @@ for URL in "${WORDLISTS[@]}"; do
     WARN "$FNAME Download Failed"
   fi
 done
-START_SPINNER "Preparing combined subdomain wordlist..."
-mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
-mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
-cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
-rm -r "$WORDLISTS_DIR"/*.txt || true
-STOP_SPINNER
-OK "Combined subdomain wordlist created"
+# START_SPINNER "Preparing combined subdomain wordlist..."
+# mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
+# mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
+# cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
+# rm -r "$WORDLISTS_DIR"/*.txt || true
+# STOP_SPINNER
+# OK "Combined subdomain wordlist created"
 
 # echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 # INFO "Downloading DNS Resolvers list..."
