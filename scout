@@ -345,6 +345,6 @@ echo -e "${BOLD}${CYAN}───────────────────
 cat "$RESOLVED_OUT" "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$COLLECTED_DIR/final_subdomains.out" 2>/dev/null || true
 COUNT=$(wc -l < "$COLLECTED_DIR/final_subdomains.out" || echo 0)
 INFO "Total unique subdomains collected: $COUNT" 
-OK "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
+INFO "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 INFO "Scout run completed."

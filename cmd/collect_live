@@ -14,5 +14,6 @@ COLLECT_LIVE(){
   "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q >/dev/null || true
   LIVE_COUNT=$(wc -l < "$RESOLVED_OUT" | tr -d ' ')
   STOP_SPINNER
-  INFO "PureDNS Resolved live hosts: $LIVE_COUNT"
+  OK "PureDNS Resolved live hosts: $LIVE_COUNT"
+  INFO "Resolved live hosts -> $RESOLVED_OUT"
 }
