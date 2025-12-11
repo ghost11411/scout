@@ -26,8 +26,6 @@ APT_PACKAGES=(
 )
 
 GO_TOOLS=(
-  "mapcidr|github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest"
-  "amass|github.com/owasp-amass/amass/v4/...@master"
   "assetfinder|github.com/tomnomnom/assetfinder@latest"
   "subfinder|github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
   "waybackurls|github.com/tomnomnom/waybackurls@latest"
@@ -43,7 +41,6 @@ GO_TOOLS=(
   "ffuf|github.com/ffuf/ffuf/v2@latest"
   "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
   "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
-  "notify|github.com/projectdiscovery/notify/cmd/notify@latest"
 )
 
 WORDLISTS=(
