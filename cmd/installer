@@ -65,7 +65,6 @@ WORDLISTS=(
   "https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt"
   "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt"
   "https://raw.githubusercontent.com/progprnv/subgeek/refs/heads/main/subdomains.txt"
-
 )
 
 # ---------------- LOGGING ----------------
