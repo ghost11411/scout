@@ -66,9 +66,6 @@ COLLECT_SUBDOMAINS(){
   done < "$INPUT_WILDCARD_ALL_FILE"
   
   OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
-  done < "$INPUT_WILDCARD_ALL_FILE"
-  echo -e ""
-  OK "Outputs are in: $OUTPUT_DIR"
 
   # after all tools finished for all domains, combine into single file
   START_SPINNER "Combining all subdomain results"
