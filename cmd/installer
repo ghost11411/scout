@@ -35,7 +35,7 @@ GO_TOOLS=(
   "subdog|github.com/rix4uni/subdog@latest"
   "xsubfind3r|github.com/hueristiq/xsubfind3r/cmd/xsubfind3r@latest"
   "cero|github.com/glebarez/cero@latest"
-  "shuffledns|github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest"
+  # "shuffledns|github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest"
   "puredns|github.com/d3mondev/puredns/v2@latest"
   "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
   "gf|github.com/tomnomnom/gf@latest"
@@ -49,22 +49,8 @@ GO_TOOLS=(
 )
 
 WORDLISTS=(
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-110000.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/big.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
-  # "https://gist.githubusercontent.com/jhaddix/86a06c5dc309d08580a018c66354a056/raw/96f4e51d96b2203f19f6381c8c545b278eaa0837/all.txt"
-  # "https://raw.githubusercontent.com/n0kovo/n0kovo_subdomains/refs/heads/main/n0kovo_subdomains_huge.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/shubs-subdomains.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/dns-Jhaddix.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/fierce-hostlist.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/deepmagic.com-prefixes-top50000.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/bug-bounty-program-subdomains-trickest-inventory.txt"
-  # "https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Discovery/DNS/bitquark-subdomains-top100000.txt"
-  # "https://wordlists-cdn.assetnote.io/data/manual/2m-subdomains.txt"
-  # "https://wordlists-cdn.assetnote.io/data/manual/best-dns-wordlist.txt"
-  # "https://raw.githubusercontent.com/progprnv/subgeek/refs/heads/main/subdomains.txt"
 )
 
 # ---------------- LOGGING ----------------
@@ -260,22 +246,15 @@ for URL in "${WORDLISTS[@]}"; do
     WARN "$FNAME Download Failed"
   fi
 done
-# START_SPINNER "Preparing combined subdomain wordlist..."
-# mkdir -p "$WORDLISTS_DIR"/subdomains "$WORDLISTS_DIR"/dir_file || true
-# mv "$WORDLISTS_DIR"/raft-large-directories.txt "$WORDLISTS_DIR"/raft-large-files.txt "$WORDLISTS_DIR"/dir_file
-# cat "$WORDLISTS_DIR"/*.txt | sort -u > "$WORDLISTS_DIR"/subdomains/subdomains_wordlist.txt
-# rm -r "$WORDLISTS_DIR"/*.txt || true
-# STOP_SPINNER
-# OK "Combined subdomain wordlist created"
 
-# echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-# INFO "Downloading DNS Resolvers list..."
-# wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
-# if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
-#   OK "Resolvers list downloaded"
-# else
-#   WARN "Resolvers list download failed"
-# fi
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+INFO "Downloading DNS Resolvers list..."
+wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
+if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
+  OK "Resolvers list downloaded"
+else
+  WARN "Resolvers list download failed"
+fi
 
 # ---------------- PERMISSIONS & SYMLINKS ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"

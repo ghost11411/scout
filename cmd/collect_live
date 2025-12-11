@@ -4,14 +4,16 @@ IFS=$' \t\n'
 
 # ---------------- LIVE HOSTS (dnsx) ----------------
 COLLECT_LIVE(){
-  ALL_SUBS_FILE="$RAW_DIR/all_subdomains.out"
+  ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
   if [[ ! -s "$ALL_SUBS_FILE" ]]; then
     ERR "No subdomains found to resolve"
     return
   fi
-  RESOLVED_OUT="$COLLECTED_DIR/resolved.out"
-  INFO "Running dnsx" && command -v dnsx || echo \"$BIN_DIR/dnsx\" -silent -l "$ALL_SUBS_FILE" -a -resp -o "$RESOLVED_OUT"
-  OK "Resolved live hosts -> $RESOLVED_OUT"
-  # create hosts list (unique hostnames)
-  awk '{print $1}' "$RESOLVED_OUT" | sort -u > "$COLLECTED_DIR/hosts.txt" || true
+  START_SPINNER "Resolving live hosts from collected subdomains using puredns"
+  RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
+  INFO "Resolving live hosts from collected subdomains"
+  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q
+  LIVE_COUNT=$(wc -l < "$RESOLVED_OUT" | tr -d ' ')
+  STOP_SPINNER
+  INFO "Resolved live hosts: $LIVE_COUNT"
 }

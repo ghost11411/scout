@@ -22,15 +22,6 @@ FORCE=0
 UPDATE=0
 UNINSTALL=0
 
-# scanner rate/delay defaults (conservative)
-FFUF_WORDLISTS=(
-  "$WORDLISTS_DIR/big.txt"
-  "$WORDLISTS_DIR/common.txt"
-  "$WORDLISTS_DIR/raft-large-directories.txt"
-  "$WORDLISTS_DIR/raft-large-files.txt"
-  "$WORDLISTS_DIR/subdomains-top1million-110000.txt"
-)
-
 # ---------------- ARGS ----------------
 INPUT_DOMAIN=""
 INPUT_DOMAIN_FILE=""
@@ -330,12 +321,12 @@ SOURCE_CMD() {
   fi
 }
 SOURCE_CMD "collect_subdomains"
-# SOURCE_CMD "collect_live"
+SOURCE_CMD "collect_live"
 # SOURCE_CMD "collect_js"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
 # SOURCE_CMD "nuclei_scan"
-export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR FFUF_WORDLISTS
+export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR INPUT_DOMAIN_ALL_FILE INPUT_WILDCARD_ALL_FILE OUTPUT_DIR
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting Scout"
@@ -343,42 +334,17 @@ CHECK_INTERNET
 CHECK_BINS || true
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
-  while read -r DOMAIN; do
-    DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
-    [[ -z "$DOMAIN" ]] && continue
-    SAFE_NAME="${DOMAIN//\*/WILDCARD}"
-    SAFE_NAME="${SAFE_NAME//\//_}"
-    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
-    mkdir -p "$DOMAIN_OUTPUT_DIR/raw" "$DOMAIN_OUTPUT_DIR/collected"
-    export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
-    echo -e "Processing target: ${BOLD}$DOMAIN${RESET}"
-    COLLECT_SUBDOMAINS
-    OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
-  done < "$INPUT_WILDCARD_ALL_FILE"
-  echo -e ""
-  OK "Outputs are in: $OUTPUT_DIR"
+  COLLECT_SUBDOMAINS
 fi
-
 ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
-cat "$ALL_SUBS_FILE" "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$OUTPUT_DIR/final_subdomains.out" 2>/dev/null || true
-COUNT=$(wc -l < "$OUTPUT_DIR/final_subdomains.out" || echo 0)
-INFO "Total unique subdomains collected: $COUNT" 
-OK "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out" 
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
-
-  # COLLECT_LIVE "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
-
-  # HOSTS_FILE="$DOMAIN_OUTPUT_DIR/collected/hosts.txt"
-  # if [[ ! -s "$HOSTS_FILE" ]]; then
-  #   WARN "No live hosts found for $DOMAIN; skipping host scans."
-  #   continue
-  # fi
-
-  # while read -r HOST; do
-  #   HOST=$(echo "$HOST" | tr -d '[:space:]')
-  #   [[ -z "$HOST" ]] && continue
-  #   INFO "Processing host: $HOST"
-  #   PORT_SCAN_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
-  #   SERVICE_DETECT_NMAP "$HOST" "$DOMAIN_OUTPUT_DIR"
-  #   RUN_FFUF_AND_NUCLEI_PER_HOST "$HOST" "$DOMAIN_OUTPUT_DIR"
-  # done < "$HOSTS_FILE"
+COLLECT_LIVE
+RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
+echo -e "${BOLD}${CYAN}─────────────────────────── FINALIZING RESULTS ───────────────────────────${RESET}\n"
+# Combine all subdomains into final_subdomains.out
+cat "$RESOLVED_OUT" "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$COLLECTED_DIR/final_subdomains.out" 2>/dev/null || true
+COUNT=$(wc -l < "$COLLECTED_DIR/final_subdomains.out" || echo 0)
+INFO "Total unique subdomains collected: $COUNT" 
+OK "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
+echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+INFO "Scout run completed."

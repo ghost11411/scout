@@ -4,68 +4,71 @@ IFS=$' \t\n'
 
 # ---------------- SUBDOMAIN COLLECTION ----------------
 COLLECT_SUBDOMAINS(){
-  while read -r domain; do
-    domain=$(echo "$domain" | tr -d '[:space:]')
-    [ -z "$domain" ] && continue
+  while read -r DOMAIN; do
+    DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
+    [[ -z "$DOMAIN" ]] && continue
+    SAFE_NAME="${DOMAIN//\*/WILDCARD}"
+    SAFE_NAME="${SAFE_NAME//\//_}"
+    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
+    mkdir -p "$DOMAIN_OUTPUT_DIR/raw" "$DOMAIN_OUTPUT_DIR/collected"
+    export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
+    echo -e "Processing target: ${BOLD}$DOMAIN${RESET}"
 
     # Subfinder
-    START_SPINNER "Running subfinder on $domain"
-    "$BIN_DIR/subfinder" -d "$domain" -all -silent >> "$RAW_DIR/subfinder.out" 2>/dev/null || true
+    START_SPINNER "Running subfinder on $DOMAIN"
+    "$BIN_DIR/subfinder" -d "$DOMAIN" -all -silent >> "$RAW_DIR/subfinder.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/subfinder.out" || echo 0)
     OK "subfinder found: $COUNT subdomains"
-
     # Assetfinder
-    START_SPINNER "Running assetfinder on $domain"
-    echo "$domain" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$RAW_DIR/assetfinder.out" 2>/dev/null || true
+    START_SPINNER "Running assetfinder on $DOMAIN"
+    echo "$DOMAIN" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$RAW_DIR/assetfinder.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/assetfinder.out" || echo 0)
     OK "assetfinder found: $COUNT subdomains"
-    
     # Findomain
-    START_SPINNER "Running findomain on $domain"
-    "$BIN_DIR/findomain" -t "$domain" --quiet >> "$RAW_DIR/findomain.out" 2>/dev/null || true
+    START_SPINNER "Running findomain on $DOMAIN"
+    "$BIN_DIR/findomain" -t "$DOMAIN" --quiet >> "$RAW_DIR/findomain.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/findomain.out" || echo 0)
     OK "findomain found: $COUNT subdomains"
-    
     # Subdog
-    START_SPINNER "Running subdog on $domain"
-    echo "$domain" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/subdog.out"
+    START_SPINNER "Running subdog on $DOMAIN"
+    echo "$DOMAIN" | "$BIN_DIR"/subdog --silent | sort -u >> "$RAW_DIR/subdog.out"
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/subdog.out" || echo 0)
     OK "subdog found: $COUNT subdomains"
-    
     # Xsubfind3r
-    START_SPINNER "Running xsubfind3r on $domain"
-    "$BIN_DIR/xsubfind3r" -d "$domain" -s >> "$RAW_DIR/xsubfind3r.out" 2>/dev/null || true
+    START_SPINNER "Running xsubfind3r on $DOMAIN"
+    "$BIN_DIR/xsubfind3r" -d "$DOMAIN" -s >> "$RAW_DIR/xsubfind3r.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/xsubfind3r.out" || echo 0)
     OK "xsubfind3r found: $COUNT subdomains"
-    
     # Cero
-    START_SPINNER "Running cero on $domain"
-    "$BIN_DIR/cero" -d "$domain" | sort -u >> "$RAW_DIR/cero.out" 2>/dev/null || true
+    START_SPINNER "Running cero on $DOMAIN"
+    "$BIN_DIR/cero" -d "$DOMAIN" | sort -u >> "$RAW_DIR/cero.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/cero.out" || echo 0)
     OK "cero found: $COUNT subdomains"
-    
     # Crt.sh
-    START_SPINNER "Running crt.sh on $domain"
-    curl -sk "https://crt.sh/?q=$domain&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$RAW_DIR/crt.out" 2>/dev/null || true
+    START_SPINNER "Running crt.sh on $DOMAIN"
+    curl -sk "https://crt.sh/?q=$DOMAIN&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$RAW_DIR/crt.out" 2>/dev/null || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/crt.out" || echo 0)
     OK "crt-sh found: $COUNT subdomains"
-    
     # Sublister
-    START_SPINNER "Running sublist3r on $domain"
-    python3 "$BIN_DIR/sublist3r//sublist3r.py" -d "$domain" -o "$RAW_DIR/sublister.out" > /dev/null 2>&1 || true
+    START_SPINNER "Running sublist3r on $DOMAIN"
+    python3 "$BIN_DIR/sublist3r//sublist3r.py" -d "$DOMAIN" -o "$RAW_DIR/sublister.out" > /dev/null 2>&1 || true
     STOP_SPINNER
     COUNT=$(wc -l < "$RAW_DIR/sublister.out" || echo 0)
     OK "sublist3r found: $COUNT subdomains"
-    
-    OK "Completed subdomain collection for $domain"
+    OK "Completed subdomain collection for $DOMAIN"
   done < "$INPUT_WILDCARD_ALL_FILE"
+  
+  OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
+  done < "$INPUT_WILDCARD_ALL_FILE"
+  echo -e ""
+  OK "Outputs are in: $OUTPUT_DIR"
 
   # after all tools finished for all domains, combine into single file
   START_SPINNER "Combining all subdomain results"
