@@ -361,8 +361,9 @@ fi
 
 ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
 cat "$ALL_SUBS_FILE" "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$OUTPUT_DIR/final_subdomains.out" 2>/dev/null || true
-OK "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out"
-  
+COUNT=$(wc -l < "$OUTPUT_DIR/final_subdomains.out" || echo 0)
+INFO "Total unique subdomains collected: $COUNT" 
+OK "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out" 
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
   # COLLECT_LIVE "$DOMAIN" "$DOMAIN_OUTPUT_DIR"
