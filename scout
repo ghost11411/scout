@@ -297,7 +297,7 @@ INFO "Output Directory: $OUTPUT_DIR"
 echo -e ""
 echo -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
-  • Subdomain enumeration: subfinder, assetfinder, findomain, subdog, xsubfind3r, cero, crt.sh, sublist3r, shuffledns
+  • Subdomain enumeration: subfinder, assetfinder, findomain, subdog, xsubfind3r, cero, crt.sh, sublist3r
   • Live host discovery: dnsx, puredns, httpx
   • Port scanning: naabu
   • Service detection: nmap

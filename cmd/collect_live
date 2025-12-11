@@ -9,11 +9,10 @@ COLLECT_LIVE(){
     ERR "No subdomains found to resolve"
     return
   fi
-  START_SPINNER "Resolving live hosts from collected subdomains using puredns"
+  START_SPINNER "Running PureDNS for Resolving live hosts"
   RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
-  INFO "Resolving live hosts from collected subdomains"
-  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q
+  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q 2>/dev/null || true
   LIVE_COUNT=$(wc -l < "$RESOLVED_OUT" | tr -d ' ')
   STOP_SPINNER
-  INFO "Resolved live hosts: $LIVE_COUNT"
+  INFO "PureDNS Resolved live hosts: $LIVE_COUNT"
 }

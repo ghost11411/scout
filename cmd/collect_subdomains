@@ -64,8 +64,6 @@ COLLECT_SUBDOMAINS(){
     OK "sublist3r found: $COUNT subdomains"
     OK "Completed subdomain collection for $DOMAIN"
   done < "$INPUT_WILDCARD_ALL_FILE"
-  
-  OK "Target $DOMAIN finished. Outputs under $DOMAIN_OUTPUT_DIR"
 
   # after all tools finished for all domains, combine into single file
   START_SPINNER "Combining all subdomain results"
@@ -77,6 +75,6 @@ COLLECT_SUBDOMAINS(){
   sort -u "$ALL_SUBS_FILE" -o "$ALL_SUBS_FILE"
   STOP_SPINNER
   COUNT=$(wc -l < "$ALL_SUBS_FILE" || echo 0)
-  OK "All Subdomains found: $COUNT subdomains"
+  OK "Subdomains found: $COUNT subdomains"
   OK "Collected all subdomains -> $ALL_SUBS_FILE"
 }
