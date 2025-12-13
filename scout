@@ -219,7 +219,7 @@ CHECK_INTERNET(){
 }
 
 CHECK_BINS(){
-  REQUIRED=(subfinder assetfinder findomain subdog gau waybackurls cero gf httpx unfurl dnsx puredns ffuf nuclei naabu)
+  REQUIRED=(subfinder assetfinder findomain subdog gau waybackurls cero xsubfind3r unfurl gf httpx unfurl dnsx massdns puredns ffuf nuclei naabu)
   MISSING=()
   for b in "${REQUIRED[@]}"; do
     if ! command -v "$b" >/dev/null 2>&1 && [[ ! -x "$BIN_DIR/$b" ]]; then
