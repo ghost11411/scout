@@ -229,7 +229,7 @@ INSTALL_SUBDOMINATOR(){
   START=$(date +%s)
   pipx install subdominator > /dev/null 2>&1 || true
   pipx ensurepath > /dev/null 2>&1 || true
-  mv "/root/.local/bin/subdominator" "$BIN_DIR/" 2>/dev/null || true
+  mv "$HOME/.local/bin/subdominator" "$BIN_DIR/" 2>/dev/null || true
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
@@ -294,6 +294,12 @@ VERIFY_INSTALL() {
   [[ -x "$BIN_DIR/findomain" ]] || { WARN "Findomain missing"; ((ERRORS++)); }
   [[ -d "$SUBLISTER_DIR" ]] || { WARN "Sublist3r missing"; ((ERRORS++)); }
   [[ -x "$BIN_DIR/massdns" ]] || { WARN "Massdns missing"; ((ERRORS++)); }
+  [[ -x "$BIN_DIR/subdominator" ]] || { WARN "Subdominator missing"; ((ERRORS++)); }
+  for URL in "${WORDLISTS[@]}"; do
+    FNAME=$(basename "$URL")
+    [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Wordlist missing: $FNAME"; ((ERRORS++)); }
+  done
+  [[ -s "$WORDLISTS_DIR/resolvers.txt" ]] || { WARN "Resolvers list missing"; ((ERRORS++)); }
   [[ -L /usr/local/bin/scout && -x /usr/local/bin/scout ]] || { WARN "Symlink missing or not executable"; ((ERRORS++)); }
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
