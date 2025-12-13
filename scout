@@ -333,7 +333,7 @@ INFO "Starting Scout"
 CHECK_INTERNET
 CHECK_BINS || true
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
-if [[ -s "$INPUT_WILDCARD_ALL_FILE" ]]; then
+if [[ -f "$INPUT_WILDCARD_ALL_FILE" ]]; then
   COLLECT_SUBDOMAINS
 fi
 ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
@@ -342,7 +342,7 @@ COLLECT_LIVE
 RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
 echo -e "${BOLD}${CYAN}─────────────────────────── FINALIZING RESULTS ───────────────────────────${RESET}\n"
 # Combine all subdomains into final_subdomains.out
-cat "$RESOLVED_OUT" "$INPUT_DOMAIN_ALL_FILE" | sort -u > "$COLLECTED_DIR/final_subdomains.out" 2>/dev/null || true
+cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" | sort -u > "$COLLECTED_DIR/final_subdomains.out" 2>/dev/null || true
 COUNT=$(wc -l < "$COLLECTED_DIR/final_subdomains.out" || echo 0)
 INFO "Total unique subdomains collected: $COUNT" 
 INFO "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
