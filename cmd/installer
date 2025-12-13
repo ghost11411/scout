@@ -42,7 +42,7 @@ GO_TOOLS=(
   "katana|github.com/projectdiscovery/katana/cmd/katana@latest"
   "gospider|github.com/jaeles-project/gospider@latest"
   "hakrawler|github.com/hakluke/hakrawler@latest"
-  "getjs|github.com/003random/getJS/v2@latest"
+  "getJS|github.com/003random/getJS/v2@latest"
   "jsluice|github.com/BishopFox/jsluice/cmd/jsluice@latest"
   "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
   "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"

@@ -11,14 +11,15 @@ COLLECT_JS_FILES(){
     START_SPINNER "Collecting JS files for $DOMAIN"
     INFO "Running gau" && "$BIN_DIR/gau" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/gau_js.out"
     INFO "waybackurls" && "$BIN_DIR/waybackurls" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/wayback_js.out"
+    INFO 
     STOP_SPINNER
   done < "$WILDCARDS"
-    # after all tools finished for all domains, combine into single file
-    ALL_JS_FILE="$RAW_DIR/all_js_files.out"
-    > "$ALL_JS_FILE"
-    for d in "$RAW_DIR"/*; do
-      [[ -d "$d" ]] || continue
-      cat "$d"/*_js.out 2>/dev/null || true
-    done | sort -u > "$ALL_JS_FILE" || true
-    OK "Collected all JS files -> $ALL_JS_FILE"
+  # after all tools finished for all domains, combine into single file
+  ALL_JS_FILE="$RAW_DIR/all_js_files.out"
+  : > "$ALL_JS_FILE"
+  for d in "$RAW_DIR"/*; do
+    [[ -d "$d" ]] || continue
+    cat "$d"/*_js.out 2>/dev/null || true
+  done | sort -u > "$ALL_JS_FILE" || true
+  OK "Collected all JS files -> $ALL_JS_FILE"
 }
