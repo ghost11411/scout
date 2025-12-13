@@ -347,4 +347,5 @@ COUNT=$(wc -l < "$COLLECTED_DIR/final_subdomains.out" || echo 0)
 INFO "Total unique subdomains collected: $COUNT" 
 INFO "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
-INFO "Scout run completed."
+echo -e "${BOLD}${GREEN}Scout run completed.${RESET}"
+echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"

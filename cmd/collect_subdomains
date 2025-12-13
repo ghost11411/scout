@@ -63,6 +63,13 @@ COLLECT_SUBDOMAINS(){
     COUNT=$(wc -l < "$RAW_DIR/sublister.out" || echo 0)
     OK "sublist3r found: $COUNT subdomains"
     INFO "Completed subdomain collection for $DOMAIN"
+    # Subdominator
+    START_SPINNER "Running subdominator on $DOMAIN"
+    subdominator -all -d "$DOMAIN" -s -o "$RAW_DIR/subdominator.out" > /dev/null 2>&1 || true
+    STOP_SPINNER
+    COUNT=$(wc -l < "$RAW_DIR/subdominator.out" || echo 0)
+    OK "subdominator found: $COUNT subdomains"
+    
   done < "$INPUT_WILDCARD_ALL_FILE"
 
   # after all tools finished for all domains, combine into single file

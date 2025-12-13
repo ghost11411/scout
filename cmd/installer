@@ -21,8 +21,8 @@ GF_DIR="$WORDLISTS_DIR/GF-Patterns"
 SUBLISTER_DIR="$BIN_DIR/sublist3r"
 
 APT_PACKAGES=(
-  git whois jq unzip python3 python3-pip python3-requests python3-dnspython
-  parallel gcc curl wget zip python3-shodan make ca-certificates libpcap-dev golang-go
+  git whois jq unzip python3 python3-pip python3-requests python3-dnspython gcc 
+  curl wget zip python3-shodan make ca-certificates libpcap-dev golang-go pipx
 )
 
 GO_TOOLS=(
@@ -39,6 +39,11 @@ GO_TOOLS=(
   "unfurl|github.com/tomnomnom/unfurl@latest"
   "httpx|github.com/projectdiscovery/httpx/cmd/httpx@latest"
   "ffuf|github.com/ffuf/ffuf/v2@latest"
+  "katana|github.com/projectdiscovery/katana/cmd/katana@latest"
+  "gospider|github.com/jaeles-project/gospider@latest"
+  "hakrawler|github.com/hakluke/hakrawler@latest"
+  "getjs|github.com/003random/getJS/v2@latest"
+  "jsluice|github.com/BishopFox/jsluice/cmd/jsluice@latest"
   "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
   "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
 )
@@ -145,10 +150,8 @@ INSTALL_FINDOMAIN() {
   local TMP ZIP
   TMP=$(mktemp -d)
   ZIP="$TMP/findomain.zip"
-
   START_SPINNER "Installing findomain"
   START=$(date +%s)
-
   if curl -sL -o "$ZIP" "$URL" && unzip -q -o "$ZIP" -d "$BIN_DIR"; then
     chmod +x "$BIN_DIR/findomain" && STATUS="success"
   else
@@ -220,6 +223,28 @@ INSTALL_MASSDNS() {
   fi
 }
 INSTALL_MASSDNS
+
+INSTALL_SUBDOMINATOR(){
+  START_SPINNER "Installing subdominator"
+  START=$(date +%s)
+  pipx install subdominator > /dev/null 2>&1 || true
+  pipx ensurepath > /dev/null 2>&1 || true
+  mv "/root/.local/bin/subdominator" "$BIN_DIR/" 2>/dev/null || true
+  STOP_SPINNER
+  END=$(date +%s)
+  TIME_TAKEN=$((END - START))
+  if [[ -f "$BIN_DIR/subdominator" ]]; then
+    STATUS="success"
+  else
+    STATUS="fail"
+  fi
+  if [[ "$STATUS" == "success" ]]; then
+    OK "subdominator installed in (${TIME_TAKEN}s)"
+  else
+    WARN "subdominator installation failed (${TIME_TAKEN}s)"
+  fi
+}
+INSTALL_SUBDOMINATOR
 
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
