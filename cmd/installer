@@ -228,12 +228,12 @@ INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
   pipx install subdominator > /dev/null 2>&1 || true
-  pipx ensurepath > /dev/null 2>&1 || true
-  mv "$HOME/.local/bin/subdominator" "$BIN_DIR/" 2>/dev/null || true
+  mv "${HOME}/.local/bin/subdominator" "$BIN_DIR/" > /dev/null 2>&1 || true
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
-  if [[ -f "$BIN_DIR/subdominator" ]]; then
+  chmod +x "$BIN_DIR/subdominator" 2>/dev/null || true
+  if command -v subdominator >/dev/null ; then
     STATUS="success"
   else
     STATUS="fail"
