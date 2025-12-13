@@ -227,7 +227,7 @@ INSTALL_MASSDNS
 INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
-  pipx install subdominator > /dev/null 2>&1 || true
+  pipx install subdominator --force > /dev/null 2>&1 || true
   mv "${HOME}/.local/bin/subdominator" "$BIN_DIR/" > /dev/null 2>&1 || true
   STOP_SPINNER
   END=$(date +%s)
