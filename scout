@@ -75,19 +75,19 @@ USAGE() {
   cat <<EOF
 Usage: scout [options]
 You can provide single or multiple comma-separated values for -dt and -wd:
-  -dd   <domain1.com,domain2.com,...>        One or more domains
+  -dm   <domain1.com,domain2.com,...>        One or more domains
   -df   <file>                               File with one domain per line
-  -wd   <*.domain1.com,*.domain2.com,...>    One or more wildcard domains
+  -wc   <*.domain1.com,*.domain2.com,...>    One or more wildcard domains
   -wf   <file>                               File with one wildcard per line
 
 Optional:
   -o <dir>                                   Custom output directory (under $WORKSPACE_DIR)
 
 Examples:
-  scout -dd example.com
-  scout -dd example.com -o <output_dir_name>
-  scout -dd ex1.com,ex2.com -wd *.ex.com,*.ex2.com
-  scout -wd *.example.com
+  scout -dm example.com
+  scout -dm example.com -o <output_dir_name>
+  scout -dm ex1.com,ex2.com -wd *.ex.com,*.ex2.com
+  scout -wc *.example.com
   scout -df domains.txt
   scout -df domains.txt -wf wildcards.txt
   scout -df example.com -wf wildcards.txt -o <output_dir_name>
@@ -111,13 +111,13 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -dd)
+    -dm)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -dd requires argument(s)."; USAGE; }
       INPUT_DOMAIN="$2"; shift 2;;
     -df)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -df requires a file path."; USAGE; }
       INPUT_DOMAIN_FILE="$2"; shift 2;;
-    -wd)
+    -wc)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wd requires argument(s)."; USAGE; }
       INPUT_WILDCARD="$2"; shift 2;;
     -wf)
