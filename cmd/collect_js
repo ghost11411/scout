@@ -3,15 +3,22 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- JS FILE COLLECTION ----------------
-COLLECT_JS_FILES(){
+COLLECT_JS(){
   while read -r DOMAIN; do
     DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
     [ -z "$DOMAIN" ] && continue
     INFO "Collecting JS files for $DOMAIN"
-    START_SPINNER "Collecting JS files for $DOMAIN"
-    INFO "Running gau" && "$BIN_DIR/gau" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/gau_js.out"
-    INFO "waybackurls" && "$BIN_DIR/waybackurls" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/wayback_js.out"
-    INFO 
+    START_SPINNER "Running GAU"
+    "$BIN_DIR/gau" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/gau_js.out"
+    STOP_SPINNER
+    START_SPINNER "Running Waybackurls"
+    "$BIN_DIR/waybackurls" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/wayback_js.out"
+    STOP_SPINNER
+    START_SPINNER "Running katana"
+    echo "$DOMAIN" | "$BIN_DIR/katana" -js-only -silent | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/katana_js.out"
+    STOP_SPINNER
+    START_SPINNER "Running Hakrawler"
+    echo "$DOMAIN" | "$BIN_DIR/hakrawler" -silent -js | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/hakrawler_js.out"
     STOP_SPINNER
   done < "$WILDCARDS"
   # after all tools finished for all domains, combine into single file
