@@ -232,8 +232,8 @@ INSTALL_SUBDOMINATOR(){
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
-  chmod +x "$BIN_DIR/subdominator" 2>/dev/null || true
-  if command -v subdominator >/dev/null ; then
+  chmod +x "$BIN_DIR/subdominator" || true
+  if command -v subdominator >/dev/null 2>&1 ; then
     STATUS="success"
   else
     STATUS="fail"
