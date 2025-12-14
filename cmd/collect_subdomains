@@ -52,7 +52,6 @@ COLLECT_SUBDOMAINS(){
   STOP_SPINNER
   COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/sublister.out" || echo 0)
   OK "sublist3r found: $COUNT subdomains"
-  INFO "Completed subdomain collection for $DOMAIN"
   # Subdominator
   START_SPINNER "Running subdominator on $DOMAIN"
   subdominator -all -d "$DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true
