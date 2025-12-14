@@ -227,7 +227,7 @@ INSTALL_MASSDNS
 INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
-  pipx uninstall subdominator > /dev/null 2&>1 || true
+  pipx uninstall subdominator > /dev/null 2>&1 || true
   pipx install subdominator --force
   pipx ensurepath
   STOP_SPINNER
