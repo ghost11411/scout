@@ -228,7 +228,7 @@ INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
   pipx install subdominator --force
-  mv "${HOME}/.local/bin/subdominator" "$BIN_DIR/"
+  ln -sf "$HOME/.local/share/pipx/venvs/subdominator/bin/subdominator" "$BIN_DIR/subdominator"
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
