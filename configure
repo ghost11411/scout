@@ -95,7 +95,7 @@ for ARG in "$@"; do
         --uninstall|-un) UNINSTALL=1 ;;
         --version|-v) echo "Scout Installer ${VER}"; exit 0 ;;
         --help|-h) USAGE; exit 0 ;;
-        *) ERR "Unknown option: $ARG";BANNER; USAGE; exit 1 ;;
+        *) ERR "Unknown option: $ARG"; BANNER; USAGE; exit 1 ;;
     esac
 done
 
