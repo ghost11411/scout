@@ -139,7 +139,7 @@ elif (( UPDATE )); then
     fi
 # ---------------- DEFAULT INSTALL ----------------
 else
-    [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR already exists. Use --force or --update."; exit 1; }
+    [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR already exists. Use --force or --update."; echo ''; exit 1; }
     INFO "Fresh install – cloning repository..."
     git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
     OK "Repository cloned"
