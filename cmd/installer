@@ -227,12 +227,12 @@ INSTALL_MASSDNS
 INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
-  pipx install subdominator --force > /dev/null 2>&1 || true
-  mv "${HOME}/.local/bin/subdominator" "$BIN_DIR/" > /dev/null 2>&1 || true
+  pipx install subdominator --force
+  mv "${HOME}/.local/bin/subdominator" "$BIN_DIR/"
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
-  if command -v subdominator >/dev/null 2>&1 ; then
+  if command -v subdominator ; then
     STATUS="success"
   else
     STATUS="fail"
