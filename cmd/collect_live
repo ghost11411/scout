@@ -4,8 +4,8 @@ IFS=$' \t\n'
 
 # ---------------- LIVE HOSTS (dnsx) ----------------
 COLLECT_LIVE(){
-  ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
-  RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
+  ALL_SUBS_FILE="$OUTPUT_DIR/subdomains/combined_subdomains.txt"
+  RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
   if [[ ! -s "$ALL_SUBS_FILE" ]]; then
     ERR "No subdomains found to resolve"
     return

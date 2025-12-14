@@ -326,7 +326,7 @@ SOURCE_CMD "collect_js"
 # SOURCE_CMD "port_scan"
 # SOURCE_CMD "service_scan"
 # SOURCE_CMD "nuclei_scan"
-export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR INPUT_DOMAIN_ALL_FILE INPUT_WILDCARD_ALL_FILE OUTPUT_DIR
+export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR OUTPUT_DIR INPUT_DOMAIN_ALL_FILE INPUT_WILDCARD_ALL_FILE
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting Scout"
@@ -342,31 +342,38 @@ if [[ -f "$INPUT_WILDCARD_ALL_FILE" ]]; then
     echo -e "Processing target for Subdomain Enumeration: ${BOLD}$DOMAIN${RESET}"
     SAFE_NAME="${DOMAIN//\*/WILDCARD}"
     SAFE_NAME="${SAFE_NAME//\//_}"
-    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/${SAFE_NAME}"
-    mkdir -p "$DOMAIN_OUTPUT_DIR/raw" "$DOMAIN_OUTPUT_DIR/collected"
-    export DOMAIN DOMAIN_OUTPUT_DIR RAW_DIR="$DOMAIN_OUTPUT_DIR/raw" COLLECTED_DIR="$DOMAIN_OUTPUT_DIR/collected"
+    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/subdomains/${SAFE_NAME}"
+    mkdir -p "$DOMAIN_OUTPUT_DIR"
+    export DOMAIN DOMAIN_OUTPUT_DIR
     COLLECT_SUBDOMAINS
   done < "$INPUT_WILDCARD_ALL_FILE"
+  find "$OUTPUT_DIR/subdomains" -type f -name "all_subdomains.txt" -exec cat {} + > "$OUTPUT_DIR/subdomains/combined_subdomains.txt" 2>/dev/null || true
+  COUNT=$(wc -l < "$OUTPUT_DIR/subdomains/combined_subdomains.txt" || echo 0)
+  INFO "Total unique subdomains of all wildcards: $COUNT"
+  INFO "Combined subdomains saved to: $OUTPUT_DIR/subdomains/combined_subdomains.txt"
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 else
   WARN "No wildcard domains provided; skipping subdomain collection."
 fi
-ALL_SUBS_FILE="$COLLECTED_DIR/all_subdomains.out"
-echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
 # Collect live hosts from collected subdomains
-COLLECT_LIVE
-RESOLVED_OUT="$COLLECTED_DIR/puredns_resolved.out"
+if [[ -s "$OUTPUT_DIR/subdomains/combined_subdomains.txt" ]]; then
+  mkdir -p "$OUTPUT_DIR/resolved"
+  COLLECT_LIVE
+  RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+
 # Combine all subdomains into final_subdomains.out
-cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" | sort -u > "$COLLECTED_DIR/final_subdomains.out" 2>/dev/null || true
-COUNT=$(wc -l < "$COLLECTED_DIR/final_subdomains.out" || echo 0)
-INFO "Total unique subdomains collected: $COUNT" 
-INFO "Final combined subdomains saved to: $COLLECTED_DIR/final_subdomains.out" 
+cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" | sort -u > "$OUTPUT_DIR/final_subdomains.out" 2>/dev/null || true
+COUNT=$(wc -l < "$OUTPUT_DIR/final_subdomains.out" || echo 0)
+INFO "Total unique subdomains collected: $COUNT"
+INFO "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
 # Collect JS files from live hosts
-while read -r DOMAIN; do
-  COLLECT_JS
-echo -e "${BOLD}${CYAN}─────────────────────────── FINALIZING RESULTS ───────────────────────────${RESET}\n"
+# while read -r DOMAIN; do
+#   COLLECT_JS
 
 echo -e "${BOLD}${GREEN}Scout run completed.${RESET}"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
