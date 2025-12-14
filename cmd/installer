@@ -199,6 +199,27 @@ INSTALL_SUBLIST3R() {
 }
 INSTALL_SUBLIST3R
 
+INSTALL_SUBDOMINATOR(){
+  START_SPINNER "Installing subdominator"
+  START=$(date +%s)
+  pipx install subdominator --force
+  pipx ensurepath
+  STOP_SPINNER
+  END=$(date +%s)
+  TIME_TAKEN=$((END - START))
+  if command -v subdominator >/dev/null 2>&1; then
+    STATUS="success"
+  else
+    STATUS="fail"
+  fi
+  if [[ "$STATUS" == "success" ]]; then
+    OK "subdominator installed in (${TIME_TAKEN}s)"
+  else
+    WARN "subdominator installation failed (${TIME_TAKEN}s)"
+  fi
+}
+INSTALL_SUBDOMINATOR
+
 INSTALL_MASSDNS() {
   START_SPINNER "Installing massdns"
   START=$(date +%s)
@@ -223,27 +244,6 @@ INSTALL_MASSDNS() {
   fi
 }
 INSTALL_MASSDNS
-
-INSTALL_SUBDOMINATOR(){
-  START_SPINNER "Installing subdominator"
-  START=$(date +%s)
-  pipx install subdominator --force
-  pipx ensurepath
-  STOP_SPINNER
-  END=$(date +%s)
-  TIME_TAKEN=$((END - START))
-  if command -v subdominator >/dev/null 2>&1; then
-    STATUS="success"
-  else
-    STATUS="fail"
-  fi
-  if [[ "$STATUS" == "success" ]]; then
-    OK "subdominator installed in (${TIME_TAKEN}s)"
-  else
-    WARN "subdominator installation failed (${TIME_TAKEN}s)"
-  fi
-}
-INSTALL_SUBDOMINATOR
 
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
