@@ -77,8 +77,8 @@ CHECK_DEPS() {
 
 # ---------------- HELP ----------------
 USAGE() {
+BANNER
 cat <<EOF
-${BANNER}
 Usage: configure [--force] [--update] [--uninstall] [--version]
   --force       Remove and reinstall
   --update      Pull latest changes
