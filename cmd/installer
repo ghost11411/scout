@@ -202,8 +202,8 @@ INSTALL_SUBLIST3R
 INSTALL_SUBDOMINATOR(){
   START_SPINNER "Installing subdominator"
   START=$(date +%s)
-  pipx install subdominator --force
-  pipx ensurepath
+  pipx install subdominator --force > /dev/null 2>&1 || true
+  pipx ensurepath > /dev/null 2>&1 || true
   STOP_SPINNER
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
@@ -231,7 +231,7 @@ INSTALL_MASSDNS() {
   END=$(date +%s)
   TIME_TAKEN=$((END - START))
   cp /tmp/massdns/bin/massdns "$BIN_DIR/"
-  rm -rf /tmp/massdns
+  rm -rf /tmp/massdns && cd $INSTALL_DIR
   if command -v massdns >/dev/null 2>&1; then
     STATUS="success"
   else
