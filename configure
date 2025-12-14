@@ -99,7 +99,7 @@ for ARG in "$@"; do
     esac
 done
 
-# ---------------- MAIN ----------------
+# ---------------- MAIN ----------------a
 BANNER
 REQUIRE_ROOT "$@"
 CHECK_DEPS
@@ -108,6 +108,7 @@ CHECK_DEPS
 if (( UNINSTALL )); then
     INFO "Uninstalling..."
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
+    pipx uninstall subdominator > /dev/null 2>&1 || true
     [[ -L /usr/local/bin/scout ]] && rm -f /usr/local/bin/scout && OK "Removed symlink"
     OK "Uninstalled successfully."
     exit 0
