@@ -1,0 +1,6 @@
+# ---------------- Claude Code / AI assistant local artifacts ----------------
+# Per-developer tooling: project instructions, skills, subagents, memory and
+# local settings. Not part of Scout itself, so it stays out of the repo.
+CLAUDE.md
+CLAUDE.local.md
+.claude/
