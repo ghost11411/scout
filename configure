@@ -9,9 +9,11 @@ BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOL
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
 INSTALL_DIR="${HOME}/scout"
+WORKSPACE_DIR="${INSTALL_DIR}/workspace"
 FORCE=0
 UPDATE=0
 UNINSTALL=0
+ASSUME_YES=0
 
 # ---------------- LOGGING ----------------
 OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
@@ -78,13 +80,28 @@ CHECK_DEPS() {
 # ---------------- HELP ----------------
 USAGE() {
 cat <<EOF
-Usage: configure [--force] [--update] [--uninstall] [--version]
-  --force       Remove and reinstall
+Usage: configure [--force] [--update] [--uninstall] [--yes] [--version]
+  --force       Remove and reinstall (scan results in workspace/ are preserved)
   --update      Pull latest changes
-  --uninstall   Remove everything
+  --uninstall   Remove everything, INCLUDING scan results in workspace/
+  --yes         Skip the uninstall confirmation prompt (for scripted use)
   --version     Show installer version
   --help, -h    Show this help
 EOF
+}
+
+# ---------------- INSTALL STEPS ----------------
+# All three install paths ended with the same three lines, and two of them
+# cloned with the same flags.
+CLONE_REPO() {
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
+    OK "Repository cloned"
+}
+
+RUN_INSTALLER() {
+    INFO "Running installer..."
+    chmod -R +x "$INSTALL_DIR/cmd/"
+    bash "$INSTALL_DIR/cmd/installer"
 }
 
 # ---------------- PARSE FLAGS ----------------
@@ -93,6 +110,7 @@ for ARG in "$@"; do
         --force|-f) FORCE=1 ;;
         --update|-up) UPDATE=1 ;;
         --uninstall|-un) UNINSTALL=1 ;;
+        --yes|-y) ASSUME_YES=1 ;;
         --version|-v) echo "Scout Installer ${VER}"; exit 0 ;;
         --help|-h) USAGE; exit 0 ;;
         *) ERR "Unknown option: $ARG"; USAGE; exit 1 ;;
@@ -106,6 +124,22 @@ CHECK_DEPS
 
 # ---------------- UNINSTALL ----------------
 if (( UNINSTALL )); then
+    # workspace/ lives inside INSTALL_DIR, so uninstalling destroys every past
+    # scan result. Say so plainly and require confirmation.
+    if [[ -d "$WORKSPACE_DIR" ]] && (( ! ASSUME_YES )); then
+        RESULT_COUNT=$(find "$WORKSPACE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+        WARN "This will permanently delete ${RESULT_COUNT} scan result director(ies) in:"
+        WARN "  $WORKSPACE_DIR"
+        printf "Type 'yes' to continue: "
+        # 2>/dev/null: with no controlling tty (CI, curl | bash) the open
+        # fails, and REPLY stays empty so we abort — but without printing a
+        # confusing "/dev/tty: No such device or address" first.
+        read -r REPLY < /dev/tty 2>/dev/null || REPLY=""
+        if [[ "$REPLY" != "yes" ]]; then
+            ERR "Aborted. Nothing was removed."
+            exit 1
+        fi
+    fi
     INFO "Uninstalling..."
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
     pipx uninstall subdominator > /dev/null 2>&1 || true
@@ -117,22 +151,29 @@ fi
 # ---------------- FORCE INSTALL ----------------
 if (( FORCE )); then
     WARN "--force: Removing old installation..."
+    # Preserve scan results across the wipe — they live under INSTALL_DIR.
+    WORKSPACE_BACKUP=""
+    if [[ -d "$WORKSPACE_DIR" ]]; then
+        WORKSPACE_BACKUP="$(mktemp -d)/workspace"
+        mv "$WORKSPACE_DIR" "$WORKSPACE_BACKUP"
+        INFO "Preserved existing scan results"
+    fi
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Old install removed"
     INFO "Cloning fresh repository..."
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
-    OK "Repository cloned"
-    INFO "Running installer..."
-    chmod -R +x "$INSTALL_DIR/cmd/"
-    bash "$INSTALL_DIR/cmd/installer"
+    CLONE_REPO
+    if [[ -n "$WORKSPACE_BACKUP" && -d "$WORKSPACE_BACKUP" ]]; then
+        mv "$WORKSPACE_BACKUP" "$WORKSPACE_DIR"
+        rmdir "$(dirname "$WORKSPACE_BACKUP")" 2>/dev/null || true
+        OK "Restored scan results to $WORKSPACE_DIR"
+    fi
+    RUN_INSTALLER
 # ---------------- UPDATE ----------------
 elif (( UPDATE )); then
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         INFO "Updating existing install..."
         (cd "$INSTALL_DIR" && git reset --hard > /dev/null 2>&1 && git pull --rebase --autostash > /dev/null 2>&1)
         OK "Repository updated"
-        INFO "Running installer..."
-        chmod -R +x "$INSTALL_DIR/cmd/"
-        bash "$INSTALL_DIR/cmd/installer"
+        RUN_INSTALLER
         OK "Update complete."
     else
         WARN "$INSTALL_DIR is not a git repo – use --force to reinstall."
@@ -141,9 +182,6 @@ elif (( UPDATE )); then
 else
     [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR already exists. Use --force or --update."; echo ''; exit 1; }
     INFO "Fresh install – cloning repository..."
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
-    OK "Repository cloned"
-    INFO "Running installer..."
-    chmod -R +x "$INSTALL_DIR/cmd/"
-    bash "$INSTALL_DIR/cmd/installer"
+    CLONE_REPO
+    RUN_INSTALLER
 fi

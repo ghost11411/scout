@@ -3,30 +3,44 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- JS FILE COLLECTION ----------------
+# Like collect_subdomains, these four sources are independent and I/O bound, so
+# they run together instead of one after another. Each ends in `|| true`: a
+# domain with no .js URLs makes `grep` exit 1, which under `set -o pipefail`
+# would otherwise abort the whole scan.
+_JS_GAU()       { "$BIN_DIR/gau" "$DOMAIN" 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/gau_js.out" || true; }
+_JS_WAYBACK()   { "$BIN_DIR/waybackurls" "$DOMAIN" 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/wayback_js.out" || true; }
+_JS_KATANA()    { echo "$DOMAIN" | "$BIN_DIR/katana" -js-only -silent 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/katana_js.out" || true; }
+_JS_HAKRAWLER() { echo "$DOMAIN" | "$BIN_DIR/hakrawler" -silent -js 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/hakrawler_js.out" || true; }
+
 COLLECT_JS(){
+  RAW_DIR="$OUTPUT_DIR/js"
+  mkdir -p "$RAW_DIR"
+
+  local RUNNERS=(_JS_GAU _JS_WAYBACK _JS_KATANA _JS_HAKRAWLER)
+  local RUNNER PID PIDS
+
   while read -r DOMAIN; do
-    DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
-    [ -z "$DOMAIN" ] && continue
+    DOMAIN="${DOMAIN//[[:space:]]/}"
+    [[ -z "$DOMAIN" ]] && continue
     INFO "Collecting JS files for $DOMAIN"
-    START_SPINNER "Running GAU"
-    "$BIN_DIR/gau" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/gau_js.out"
+    JS_DIR="$RAW_DIR/$(SAFE_NAME "$DOMAIN")"
+    mkdir -p "$JS_DIR"
+    export DOMAIN JS_DIR
+
+    PIDS=()
+    for RUNNER in "${RUNNERS[@]}"; do
+      "$RUNNER" &
+      PIDS+=("$!")
+    done
+    START_SPINNER "Running ${#RUNNERS[@]} JS collection tools in parallel on $DOMAIN"
+    for PID in "${PIDS[@]}"; do
+      wait "$PID" || true
+    done
     STOP_SPINNER
-    START_SPINNER "Running Waybackurls"
-    "$BIN_DIR/waybackurls" "$DOMAIN" | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/wayback_js.out"
-    STOP_SPINNER
-    START_SPINNER "Running katana"
-    echo "$DOMAIN" | "$BIN_DIR/katana" -js-only -silent | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/katana_js.out"
-    STOP_SPINNER
-    START_SPINNER "Running Hakrawler"
-    echo "$DOMAIN" | "$BIN_DIR/hakrawler" -silent -js | grep -iE '\.js$' | sort -u > "$RAW_DIR/$DOMAIN/hakrawler_js.out"
-    STOP_SPINNER
-  done < "$WILDCARDS"
+  done < "$INPUT_WILDCARD_ALL_FILE"
+
   # after all tools finished for all domains, combine into single file
   ALL_JS_FILE="$RAW_DIR/all_js_files.out"
-  : > "$ALL_JS_FILE"
-  for d in "$RAW_DIR"/*; do
-    [[ -d "$d" ]] || continue
-    cat "$d"/*_js.out 2>/dev/null || true
-  done | sort -u > "$ALL_JS_FILE" || true
-  OK "Collected all JS files -> $ALL_JS_FILE"
+  cat "$RAW_DIR"/*/*_js.out 2>/dev/null | sort -u > "$ALL_JS_FILE" || true
+  OK "Collected all JS files -> $ALL_JS_FILE ($(COUNT_LINES "$ALL_JS_FILE") URLs)"
 }

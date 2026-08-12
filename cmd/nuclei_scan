@@ -6,27 +6,25 @@ IFS=$' \t\n'
 RUN_NUCLEI(){
   local HOST="$1"
   local HOST_SAFE
-  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
-  local NUC_DIR="$COLLECTED_DIR/nuclei"
+  HOST_SAFE=$(SAFE_NAME "$HOST")   # shared helper; was a per-host echo|sed
+  local NUC_DIR="$OUTPUT_DIR/nuclei"
   mkdir -p "$NUC_DIR"
 
   # prepare nuclei targets file using host:port combos (http & https)
   NUC_TARGETS="$NUC_DIR/${HOST_SAFE}_targets.txt"
-  > "$NUC_TARGETS"
-  # use ports file to generate host:port combos
-  PORT_FILE="$COLLECTED_DIR/ports/${HOST_SAFE}_ports"
+  # use ports file to generate host:port combos. One awk pass instead of
+  # reopening the targets file twice per port.
+  PORT_FILE="$OUTPUT_DIR/ports/${HOST_SAFE}_ports"
   if [[ -s "$PORT_FILE" ]]; then
-    while read -r P; do
-      echo "http://${HOST}:${P}" >> "$NUC_TARGETS"
-      echo "https://${HOST}:${P}" >> "$NUC_TARGETS"
-    done < "$PORT_FILE"
+    awk -v h="$HOST" 'NF { print "http://" h ":" $1; print "https://" h ":" $1 }' \
+      "$PORT_FILE" > "$NUC_TARGETS"
   else
-    echo "http://${HOST}" >> "$NUC_TARGETS"
-    echo "https://${HOST}" >> "$NUC_TARGETS"
+    printf 'http://%s\nhttps://%s\n' "$HOST" "$HOST" > "$NUC_TARGETS"
   fi
 
   if [[ -s "$NUC_TARGETS" ]]; then
     NUC_OUT="$NUC_DIR/${HOST_SAFE}.json"
-    INFO "nuclei -> $HOST" && "$(command -v nuclei || echo \"$BIN_DIR/nuclei\")" -l "$NUC_TARGETS" -o "$NUC_OUT" -json
+    # -jsonl is the v3 flag (the installer pins nuclei/v3); v2 used -json.
+    INFO "nuclei -> $HOST" && "$(command -v nuclei || echo "$BIN_DIR/nuclei")" -l "$NUC_TARGETS" -o "$NUC_OUT" -jsonl || true
   fi
 }

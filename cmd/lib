@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Shared colors, logging, timing, spinner, and small utility helpers for
+# `scout` and `cmd/installer`. Not sourced by `configure`, which must stay a
+# self-contained bootstrap script runnable via `curl | bash` before this
+# repo is even cloned.
+
+# ---------------- COLORS ----------------
+BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
+
+# ---------------- LOGGING ----------------
+OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
+INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
+WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
+ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
+
+# ---------------- CLOCK ----------------
+# NOW <varname> stores the current unix time in <varname>. Assigning via
+# `printf -v` instead of returning through `$(...)` keeps this fork-free on
+# bash 5, which matters because the spinner reads the clock ~14x/second for
+# the entire length of a run.
+if [[ -n "${EPOCHSECONDS:-}" ]]; then
+  NOW(){ printf -v "$1" '%s' "$EPOCHSECONDS"; }
+else
+  NOW(){ printf -v "$1" '%s' "$(date +%s)"; }
+fi
+
+# ---------------- NON-FORKING SLEEP ----------------
+# `sleep` is an external binary: the banner alone forks it ~400 times and the
+# spinner ~14 times a second for the whole run. Reading from a fifo that has
+# no writer blocks for exactly the timeout using nothing but builtins. The fd
+# is opened read-write so the fifo never signals EOF and `read` really waits.
+if [[ -z "${_SLEEP_FD:-}" ]]; then
+  _SLEEP_FD=""
+  _SLEEP_FIFO="$(mktemp -u 2>/dev/null || echo "")"
+  if [[ -n "$_SLEEP_FIFO" ]] && mkfifo "$_SLEEP_FIFO" 2>/dev/null; then
+    # NOTE: no `2>/dev/null` here. `exec` with redirections and no command
+    # applies them to the shell itself, so that would permanently send this
+    # script's stderr to /dev/null and silently swallow every ERR message.
+    # mkfifo has already succeeded on a path we just created, so the open is
+    # safe to attempt unguarded.
+    exec {_SLEEP_FD}<>"$_SLEEP_FIFO"
+    rm -f "$_SLEEP_FIFO"
+  fi
+  unset _SLEEP_FIFO
+fi
+
+if [[ -n "${_SLEEP_FD:-}" ]]; then
+  # `read` returns >128 on timeout, which is the expected path here.
+  _SLEEP(){ read -r -t "$1" -u "$_SLEEP_FD" _ || true; }
+else
+  _SLEEP(){ sleep "$1"; }
+fi
+
+# ---------------- SMALL UTILITIES ----------------
+# Line count that is safe on a missing or empty file: prints 0 instead of
+# letting `wc` leak "No such file or directory" over a live spinner line.
+COUNT_LINES(){
+  local N
+  if [[ -s "$1" ]] && N=$(wc -l < "$1" 2>/dev/null); then
+    printf '%s' "${N//[[:space:]]/}"
+  else
+    printf '0'
+  fi
+}
+
+# Turn a domain, wildcard, or host:port into a safe path component.
+# Pure bash: replaces `echo "$X" | sed -E 's/[:\/]/_/g'` (two forks per host).
+SAFE_NAME(){
+  local S="$1"
+  S="${S//\*/WILDCARD}"; S="${S//\//_}"; S="${S//:/_}"
+  printf '%s' "$S"
+}
+
+# ---------------- BANNER ----------------
+# Expects VER to already be set by the caller.
+BANNER(){
+  ASCII_SCOUT=$(cat <<'EOF'
+    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
+   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
+  | $$  \__/| $$  \__/| $$  | $$| $$  | $$   | $$
+  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$
+   \____  $$| $$      | $$  | $$| $$  | $$   | $$
+   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$
+  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$
+   \______/  \______/  \______/  \______/    |__/
+EOF
+  )
+  TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+
+  while IFS= read -r LINE; do
+    for ((i=0;i<${#LINE};i++)); do
+      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
+      _SLEEP 0.0005
+    done
+    printf "\n"
+  done <<< "$ASCII_SCOUT"
+
+  for ((i=0;i<${#TAGLINE};i++)); do
+    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
+    _SLEEP 0.001
+  done
+  printf "\n"
+  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+}
+
+# ---------------- REQUIRE ROOT ----------------
+REQUIRE_ROOT() {
+  if (( EUID != 0 )); then
+    echo -e "${RED}[X] Root privileges required.${RESET}"
+    echo -e "${YELLOW}[*] Re-running with sudo...${RESET}\n"
+    exec sudo -E bash "$0" "$@"  # Preserve env and args
+  fi
+}
+
+# ---------------- SPINNER ----------------
+START_SPINNER() {
+  local PROCESSING="$1"
+  local BRAILLE=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  local CHAR TICK
+  NOW SPIN_START
+  while true; do
+    NOW TICK
+    ELAPSED=$(( TICK - SPIN_START ))
+    for CHAR in "${BRAILLE[@]}"; do
+      printf "\r${YELLOW}[${CHAR}]${RESET} ${PROCESSING} ${CYAN}(${ELAPSED}s)${RESET}"
+      _SLEEP 0.07
+    done
+  done &
+  SPINNER_PID=$!
+}
+
+STOP_SPINNER() {
+  if [[ -n "${SPINNER_PID:-}" ]]; then
+    kill "$SPINNER_PID" 2>/dev/null || true
+    wait "$SPINNER_PID" 2>/dev/null || true
+    # Clear the pid so a later STOP_SPINNER or an EXIT trap can't signal a
+    # recycled, unrelated process.
+    SPINNER_PID=""
+    printf "\r\033[K"
+  fi
+  local END
+  NOW END
+  ELAPSED=$(( END - ${SPIN_START:-$END} ))
+}

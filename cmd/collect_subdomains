@@ -3,72 +3,61 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- SUBDOMAIN COLLECTION ----------------
-COLLECT_SUBDOMAINS(){
-  # Subfinder
-  START_SPINNER "Running subfinder on $DOMAIN"
-  "$BIN_DIR/subfinder" -d "$DOMAIN" -all -silent >> "$DOMAIN_OUTPUT_DIR/subfinder.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/subfinder.out" || echo 0)
-  OK "subfinder found: $COUNT subdomains"
-  # Assetfinder
-  START_SPINNER "Running assetfinder on $DOMAIN"
-  echo "$DOMAIN" | "$BIN_DIR/assetfinder" -subs-only | sort -u >> "$DOMAIN_OUTPUT_DIR/assetfinder.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/assetfinder.out" || echo 0)
-  OK "assetfinder found: $COUNT subdomains"
-  # Findomain
-  START_SPINNER "Running findomain on $DOMAIN"
-  "$BIN_DIR/findomain" -t "$DOMAIN" --quiet >> "$DOMAIN_OUTPUT_DIR/findomain.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/findomain.out" || echo 0)
-  OK "findomain found: $COUNT subdomains"
-  # Subdog
-  START_SPINNER "Running subdog on $DOMAIN"
-  echo "$DOMAIN" | "$BIN_DIR"/subdog --silent | sort -u >> "$DOMAIN_OUTPUT_DIR/subdog.out"
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/subdog.out" || echo 0)
-  OK "subdog found: $COUNT subdomains"
-  # Xsubfind3r
-  START_SPINNER "Running xsubfind3r on $DOMAIN"
-  "$BIN_DIR/xsubfind3r" -d "$DOMAIN" -s >> "$DOMAIN_OUTPUT_DIR/xsubfind3r.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/xsubfind3r.out" || echo 0)
-  OK "xsubfind3r found: $COUNT subdomains"
-  # Cero
-  START_SPINNER "Running cero on $DOMAIN"
-  "$BIN_DIR/cero" -d "$DOMAIN" | sort -u >> "$DOMAIN_OUTPUT_DIR/cero.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/cero.out" || echo 0)
-  OK "cero found: $COUNT subdomains"
-  # Crt.sh
-  START_SPINNER "Running crt.sh on $DOMAIN"
-  curl -sk "https://crt.sh/?q=$DOMAIN&output=json" | tr ',' '\n' | awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4);print $4}' | sort -u >> "$DOMAIN_OUTPUT_DIR/crt.out" 2>/dev/null || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/crt.out" || echo 0)
-  OK "crt-sh found: $COUNT subdomains"
-  # Sublister
-  START_SPINNER "Running sublist3r on $DOMAIN"
-  python3 "$BIN_DIR/sublist3r//sublist3r.py" -d "$DOMAIN" -o "$DOMAIN_OUTPUT_DIR/sublister.out" > /dev/null 2>&1 || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/sublister.out" || echo 0)
-  OK "sublist3r found: $COUNT subdomains"
-  # Subdominator
-  START_SPINNER "Running subdominator on $DOMAIN"
-  subdominator -all -d "$DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true
-  STOP_SPINNER
-  COUNT=$(wc -l < "$DOMAIN_OUTPUT_DIR/subdominator.out" || echo 0)
-  OK "subdominator found: $COUNT subdomains"
+# Each tool below hits an independent, unrelated data source, so they're
+# launched together and waited on once instead of running one at a time.
+# Previously this stage's wall-clock time was the SUM of every tool's
+# runtime; now it's roughly the slowest single tool's runtime.
 
-  # after all tools finished for all domains, combine into single file
+_SUBFINDER()     { "$BIN_DIR/subfinder" -d "$DOMAIN" -all -silent > "$DOMAIN_OUTPUT_DIR/subfinder.out" 2>/dev/null || true; }
+_ASSETFINDER()   { echo "$DOMAIN" | "$BIN_DIR/assetfinder" -subs-only 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/assetfinder.out" || true; }
+_FINDOMAIN()     { "$BIN_DIR/findomain" -t "$DOMAIN" --quiet > "$DOMAIN_OUTPUT_DIR/findomain.out" 2>/dev/null || true; }
+_SUBDOG()        { echo "$DOMAIN" | "$BIN_DIR/subdog" --silent 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/subdog.out" || true; }
+_XSUBFIND3R()    { "$BIN_DIR/xsubfind3r" -d "$DOMAIN" -s > "$DOMAIN_OUTPUT_DIR/xsubfind3r.out" 2>/dev/null || true; }
+_CERO()          { "$BIN_DIR/cero" -d "$DOMAIN" 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/cero.out" || true; }
+_SUBLIST3R()     { python3 "$BIN_DIR/sublist3r/sublist3r.py" -d "$DOMAIN" -o "$DOMAIN_OUTPUT_DIR/sublister.out" > /dev/null 2>&1 || true; }
+_SUBDOMINATOR()  { subdominator -all -d "$DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true; }
+_CRTSH() {
+  curl -sk --max-time 30 "https://crt.sh/?q=$DOMAIN&output=json" |
+    tr ',' '\n' |
+    awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4); print $4}' |
+    sort -u > "$DOMAIN_OUTPUT_DIR/crt.out" || true
+}
+
+COLLECT_SUBDOMAINS(){
+  # Tool name -> the function that runs it. Driving the launch loop from this
+  # table keeps the tool list, the launch order, and the per-tool result
+  # counts below from drifting apart the way three hand-written lists would.
+  local -A RUNNERS=(
+    [subfinder]=_SUBFINDER   [assetfinder]=_ASSETFINDER   [findomain]=_FINDOMAIN
+    [subdog]=_SUBDOG         [xsubfind3r]=_XSUBFIND3R     [cero]=_CERO
+    [crt]=_CRTSH             [sublister]=_SUBLIST3R       [subdominator]=_SUBDOMINATOR
+  )
+  local TOOLS=(subfinder assetfinder findomain subdog xsubfind3r cero crt sublister subdominator)
+  local PIDS=() T PID COUNT
+
+  for T in "${TOOLS[@]}"; do
+    "${RUNNERS[$T]}" &
+    PIDS+=("$!")
+  done
+
+  START_SPINNER "Running ${#TOOLS[@]} subdomain enumeration tools in parallel on $DOMAIN"
+  for PID in "${PIDS[@]}"; do
+    wait "$PID" || true
+  done
+  STOP_SPINNER
+
+  for T in "${TOOLS[@]}"; do
+    OK "$T found: $(COUNT_LINES "$DOMAIN_OUTPUT_DIR/${T}.out") subdomains"
+  done
+
+  # after all tools finished, combine into a single deduped file.
+  # One `cat` over the glob instead of a fork per file, and one pass into
+  # sort instead of writing the concatenation out and re-sorting it in place.
   START_SPINNER "Combining all subdomain results"
   ALL_SUBS_FILE="$DOMAIN_OUTPUT_DIR/all_subdomains.txt"
-  : > "$ALL_SUBS_FILE"
-  for f in "$DOMAIN_OUTPUT_DIR"/*.out; do
-    cat "$f" >> "$ALL_SUBS_FILE" 2>/dev/null || true
-  done
-  sort -u "$ALL_SUBS_FILE" -o "$ALL_SUBS_FILE"
+  cat "$DOMAIN_OUTPUT_DIR"/*.out 2>/dev/null | sort -u > "$ALL_SUBS_FILE" || true
   STOP_SPINNER
-  COUNT=$(wc -l < "$ALL_SUBS_FILE" || echo 0)
+  COUNT=$(COUNT_LINES "$ALL_SUBS_FILE")
   INFO "Subdomains found for $DOMAIN: $COUNT subdomains"
   INFO "Collected all subdomains -> $ALL_SUBS_FILE"
 }

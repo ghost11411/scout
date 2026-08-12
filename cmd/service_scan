@@ -6,8 +6,8 @@ IFS=$' \t\n'
 SERVICE_DETECT(){
   local HOST="$1"
   local HOST_SAFE
-  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
-  local PORTS_DIR="$COLLECTED_DIR/ports"
+  HOST_SAFE=$(SAFE_NAME "$HOST")   # shared helper; was a per-host echo|sed
+  local PORTS_DIR="$OUTPUT_DIR/ports"
   local PORT_FILE="$PORTS_DIR/${HOST_SAFE}_ports"
   local NMAP_OUT="$PORTS_DIR/${HOST_SAFE}_nmap_services.nmap"
 
@@ -24,6 +24,6 @@ SERVICE_DETECT(){
   fi
 
   INFO "Running nmap -sV -T4 against $HOST ports: $ports"
-  RUN_TOOL "nmap services -> $HOST" "$(command -v nmap || echo \"$BIN_DIR/nmap\")" -Pn -sV -T4 -p "$ports" -oN "$NMAP_OUT" "$HOST"
+  "$(command -v nmap || echo "$BIN_DIR/nmap")" -Pn -sV -T4 -p "$ports" -oN "$NMAP_OUT" "$HOST" || true
   OK "Nmap services saved -> $NMAP_OUT"
 }

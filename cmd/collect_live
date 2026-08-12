@@ -2,18 +2,27 @@
 set -euo pipefail
 IFS=$' \t\n'
 
-# ---------------- LIVE HOSTS (dnsx) ----------------
+# ---------------- LIVE HOSTS (puredns) ----------------
 COLLECT_LIVE(){
-  ALL_SUBS_FILE="$OUTPUT_DIR/subdomains/combined_subdomains.txt"
-  RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
+  # Caller (scout) builds RESOLVE_INPUT = enumerated subdomains + plain
+  # -dm/-df domains. Fall back to the enumerated set alone if unset.
+  local ALL_SUBS_FILE="${RESOLVE_INPUT:-$OUTPUT_DIR/subdomains/combined_subdomains.txt}"
+  RESOLVED_OUT="${RESOLVED_OUT:-$OUTPUT_DIR/resolved/puredns_resolved.out}"
+  mkdir -p "$(dirname "$RESOLVED_OUT")"
+
   if [[ ! -s "$ALL_SUBS_FILE" ]]; then
     ERR "No subdomains found to resolve"
     return
   fi
+
   START_SPINNER "Running PureDNS for Resolving live hosts"
-  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q > /dev/null || true
-  LIVE_COUNT=$(wc -l < "$RESOLVED_OUT" | tr -d ' ')
+  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q > /dev/null 2>&1 || true
   STOP_SPINNER
+
+  # Count after stopping the spinner, and via COUNT_LINES so a puredns failure
+  # can't leak a wc error over the live spinner line.
+  local LIVE_COUNT
+  LIVE_COUNT=$(COUNT_LINES "$RESOLVED_OUT")
   OK "PureDNS Resolved live hosts: $LIVE_COUNT"
   INFO "Resolved live hosts -> $RESOLVED_OUT"
 }

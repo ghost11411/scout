@@ -6,35 +6,40 @@ IFS=$' \t\n'
 PORT_SCAN_PER_HOST(){
   local HOST="$1"
   local HOST_SAFE
-  HOST_SAFE=$(echo "$HOST" | sed -E 's/[:\/]/_/g')
-  local PORTS_DIR="$COLLECTED_DIR/ports"
+  HOST_SAFE=$(SAFE_NAME "$HOST")   # shared helper; was a per-host echo|sed
+  local PORTS_DIR="$OUTPUT_DIR/ports"
   mkdir -p "$PORTS_DIR"
+
+  local NAABU_RATE="${NAABU_RATE:-1000}"
+  local MASSCAN_RATE="${MASSCAN_RATE:-1000}"
 
   NAABU_OUT="$PORTS_DIR/${HOST_SAFE}_naabu.out"
   MASS_OUT="$PORTS_DIR/${HOST_SAFE}_masscan.out"
 
   INFO "Running naabu for $HOST"
-  INFO "naabu -> $HOST" && command -v naabu || echo \"$BIN_DIR/naabu\" -host "$HOST" -ports 1-65535 -rate "$NAABU_RATE" -silent -o "$NAABU_OUT"
+  "$(command -v naabu || echo "$BIN_DIR/naabu")" -host "$HOST" -ports 1-65535 -rate "$NAABU_RATE" -silent -o "$NAABU_OUT" || true
 
-  INFO "Running masscan for $HOST"
   if command -v masscan >/dev/null 2>&1; then
-    INFO "masscan -> $HOST" && command -v masscan || echo \"$BIN_DIR/masscan\" "$HOST" -p1-65535 --rate "$MASSCAN_RATE" -oG "$MASS_OUT"
+    INFO "Running masscan for $HOST"
+    masscan "$HOST" -p1-65535 --rate "$MASSCAN_RATE" -oG "$MASS_OUT" || true
   else
     INFO "masscan not installed, skipping masscan for $HOST"
   fi
 
-  # aggregate ports from naabu and masscan -> hostname_ports (dedup)
+  # Aggregate ports from naabu and masscan -> hostname_ports (deduped).
+  # Both extractions feed one group so the intermediate file is written once,
+  # and `sort -nu` replaces the old `sort -n | awk | uniq` chain.
   AGG="$PORTS_DIR/${HOST_SAFE}_agg.txt"
-  > "$AGG"
-  if [[ -f "$NAABU_OUT" ]]; then
-    # naabu writes one port per line typically
-    grep -oE '[0-9]{1,5}' "$NAABU_OUT" >> "$AGG" || true
-  fi
-  if [[ -f "$MASS_OUT" ]]; then
-    grep -oE '[0-9]{1,5}' "$MASS_OUT" >> "$AGG" || true
-  fi
-  sort -n "$AGG" | awk '
-    $1>=1 && $1<=65535 {print $1}
-  ' | uniq > "$PORTS_DIR/${HOST_SAFE}_ports"
+  {
+    # naabu writes "host:port" — take the field after the LAST colon so IPv4
+    # octets (and IPv6 segments) aren't mistaken for port numbers. NF>1
+    # requires a colon, so a bare "192.168.1.1" contributes nothing.
+    [[ -f "$NAABU_OUT" ]] && awk -F: 'NF > 1 { print $NF }' "$NAABU_OUT"
+    # masscan -oG: "Host: 1.2.3.4 () Ports: 80/open/tcp//http//"
+    [[ -f "$MASS_OUT" ]] && sed -nE 's/.*Ports:[[:space:]]*([0-9]{1,5}).*/\1/p' "$MASS_OUT"
+  } > "$AGG" 2>/dev/null || true
+  # Only fully-numeric, in-range values survive; sort -nu replaces sort|uniq.
+  awk '$0 ~ /^[0-9]+$/ && $0+0 >= 1 && $0+0 <= 65535 { print $0+0 }' "$AGG" |
+    sort -nu > "$PORTS_DIR/${HOST_SAFE}_ports"
   OK "Ports for $HOST -> $PORTS_DIR/${HOST_SAFE}_ports"
 }

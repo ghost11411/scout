@@ -6,10 +6,6 @@ IFS=$' \t\n'
 START_TIME=$(date +%s)
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-# ---------------- COLORS ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"
-BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
-
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
@@ -53,13 +49,13 @@ WORDLISTS=(
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
 )
 
-# ---------------- LOGGING ----------------
-OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
-INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
-WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
+# ---------------- SHARED LIB (colors, logging, spinner, banner, root check) ----------------
+# Source relative to this script so the installer works from any checkout and
+# survives sudo resetting HOME.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "${SCRIPT_DIR}/lib"
 
-# ---------------- SPINNER & CLEANUP ----------------
+# ---------------- CLEANUP ----------------
 CLEANUP() {
     if [[ -n "${SPINNER_PID:-}" ]]; then
         kill "$SPINNER_PID" 2>/dev/null || true
@@ -69,39 +65,6 @@ CLEANUP() {
 }
 trap CLEANUP SIGINT
 
-START_SPINNER() {
-    processing="$1"
-    SPIN_START=$(date +%s)
-    BRAILLE=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-    while true; do
-        ELAPSED=$(( $(date +%s) - SPIN_START ))
-        for char in "${BRAILLE[@]}"; do
-            printf "\r${YELLOW}[${char}]${RESET} ${processing} ${CYAN}(${ELAPSED}s)${RESET}"
-            sleep 0.07
-        done
-    done &
-    SPINNER_PID=$!
-}
-
-STOP_SPINNER() {
-    if [[ -n "${SPINNER_PID:-}" ]]; then
-        kill "$SPINNER_PID" 2>/dev/null || true
-        wait "$SPINNER_PID" 2>/dev/null || true
-        echo -ne "\r\033[K"  # Clear spinner line
-    fi
-    local END=$(date +%s)
-    ELAPSED=$(( END - SPIN_START ))
-}
-
-# ---------------- REQUIRE ROOT ----------------
-REQUIRE_ROOT() {
-  if (( EUID != 0 )); then
-    echo -e "${RED}[X] Root privileges required.${RESET}"
-    echo -e "${YELLOW}[*] Re-running with sudo...${RESET}\n"
-    exec sudo -E bash "$0" "$@"
-  fi
-}
-
 # ---------------- MAIN INSTALL ----------------
 REQUIRE_ROOT "$@"
 
@@ -109,142 +72,135 @@ REQUIRE_ROOT "$@"
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Setting up directories and tools..."
 mkdir -p "$TOOLS_DIR" "$BIN_DIR" "$WORDLISTS_DIR"
-find "$INSTALL_DIR" -type f -exec chmod +x {} + || true
+# Only the entrypoint and pipeline scripts need +x — not README/LICENSE,
+# wordlists, or previous scan output.
+chmod +x "$INSTALL_DIR/scout" "$INSTALL_DIR/configure" 2>/dev/null || true
+find "$INSTALL_DIR/cmd" -type f -exec chmod +x {} + 2>/dev/null || true
 
 # ---------------- APT INSTALL WITH SPINNER ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Installing and Updating APT packages..."
 START_SPINNER "Installing APT packages"
-{
-    apt-get update -y -qq && apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"
-} > /dev/null 2>&1
-STOP_SPINNER
-OK "APT packages installed in (${ELAPSED}s)"
+if { apt-get update -y -qq && apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; } > /dev/null 2>&1; then
+  STOP_SPINNER
+  OK "APT packages installed in (${ELAPSED}s)"
+else
+  STOP_SPINNER
+  WARN "APT package installation failed (${ELAPSED}s) — some tools may not build correctly"
+fi
 
 # ---------------- GO INSTALL WITH SPINNER ----------------
-echo -e "${BOLD}${GREEN}=====================================================${RESET}"v
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 if command -v go >/dev/null 2>&1; then
     export GOBIN="$BIN_DIR"
     export PATH="$GOBIN:$PATH"
-    INFO "Installing Go tools..."
+    # Bound concurrency: each `go install` spawns a full compile, and these
+    # tools are commonly installed on small VPSes where ~19 at once thrashes
+    # or OOMs. Cap at nproc (max 4).
+    JOBS=$(nproc 2>/dev/null || echo 2)
+    (( JOBS > 4 )) && JOBS=4
+    INFO "Installing ${#GO_TOOLS[@]} Go tools (${JOBS} at a time)..."
+    NOW START
+    START_SPINNER "Installing Go tools"
+
+    PIDS=()
+    NAMES=()
+    FAILED=()
     for PAIR in "${GO_TOOLS[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
-        START_SPINNER "Installing ${NAME}"
-        START=$(date +%s)
-        if go install -trimpath "$PKG" > /dev/null 2>&1; then
-            STOP_SPINNER
-            END=$(date +%s)
-            OK "${NAME} installed in ($((END-START))s)"
-        else
-            STOP_SPINNER
-            WARN "${NAME} installation failed"
+        go install -trimpath "$PKG" > /dev/null 2>&1 &
+        PIDS+=("$!")
+        NAMES+=("$NAME")
+
+        # Drain the oldest job once the window is full.
+        if (( ${#PIDS[@]} >= JOBS )); then
+            wait "${PIDS[0]}" || FAILED+=("${NAMES[0]}")
+            PIDS=("${PIDS[@]:1}")
+            NAMES=("${NAMES[@]:1}")
         fi
     done
+
+    for i in "${!PIDS[@]}"; do
+        wait "${PIDS[$i]}" || FAILED+=("${NAMES[$i]}")
+    done
+
+    STOP_SPINNER
+    NOW END
+    OK "Go tools installed in ($((END-START))s)"
+    if (( ${#FAILED[@]} > 0 )); then
+        WARN "Failed to install: ${FAILED[*]}"
+    fi
 else
     WARN "Go not found – skipping Go tools"
 fi
+
+# Every bespoke installer below reported its result with the same eight lines
+# of timing + success/fail boilerplate. RUN_STEP owns the spinner, the clock,
+# and the report; each installer just sets STATUS to "success" or "fail".
+#   RUN_STEP <display name> <function>
+RUN_STEP() {
+  local NAME="$1" FN="$2" START END
+  STATUS="fail"
+  NOW START
+  START_SPINNER "Installing $NAME"
+  "$FN" || true
+  STOP_SPINNER
+  NOW END
+  if [[ "$STATUS" == "success" ]]; then
+    OK "$NAME installed in ($((END - START))s)"
+  else
+    WARN "$NAME installation failed ($((END - START))s)"
+  fi
+}
 
 INSTALL_FINDOMAIN() {
   local URL="https://github.com/Findomain/Findomain/releases/latest/download/findomain-linux.zip"
   local TMP ZIP
   TMP=$(mktemp -d)
   ZIP="$TMP/findomain.zip"
-  START_SPINNER "Installing findomain"
-  START=$(date +%s)
   if curl -sL -o "$ZIP" "$URL" && unzip -q -o "$ZIP" -d "$BIN_DIR"; then
     chmod +x "$BIN_DIR/findomain" && STATUS="success"
-  else
-    STATUS="fail"
   fi
-
-  STOP_SPINNER
-  END=$(date +%s)
-  TIME_TAKEN=$((END - START))
-
-  if [[ "$STATUS" == "success" ]]; then
-    OK "findomain installed in (${TIME_TAKEN}s)"
-  else
-    WARN "findomain installation failed (${TIME_TAKEN}s)"
-  fi
-
   rm -rf "$TMP"
 }
-INSTALL_FINDOMAIN
+RUN_STEP findomain INSTALL_FINDOMAIN
 
 # ---- SUBLIST3R ----
 INSTALL_SUBLIST3R() {
-  START_SPINNER "Installing sublist3r"
-  START=$(date +%s)
-  if [[ ! -d "$SUBLISTER_DIR" ]]; then
-    git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" > /dev/null 2>&1 || true
-    if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages &>/dev/null; then
-      STATUS="success"
-    else
-      STATUS="fail"
-    fi
-  else
-    STATUS="fail"
+  if [[ -d "$SUBLISTER_DIR" ]]; then
+    STATUS="success"
+    return
   fi
-
-  STOP_SPINNER
-  END=$(date +%s)
-  TIME_TAKEN=$((END - START))
-
-  if [[ "$STATUS" == "success" ]]; then
-    OK "sublist3r installed in (${TIME_TAKEN}s)"
-  else
-    WARN "sublist3r installation failed (${TIME_TAKEN}s)"
+  git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" > /dev/null 2>&1 || true
+  if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages &>/dev/null; then
+    STATUS="success"
   fi
 }
-INSTALL_SUBLIST3R
+RUN_STEP sublist3r INSTALL_SUBLIST3R
 
 INSTALL_SUBDOMINATOR(){
-  START_SPINNER "Installing subdominator"
-  START=$(date +%s)
   pipx install subdominator --force > /dev/null 2>&1 || true
   pipx ensurepath > /dev/null 2>&1 || true
   ln -sf "$HOME/.local/share/pipx/venvs/subdominator/bin/subdominator" "$BIN_DIR/subdominator" || true
-  STOP_SPINNER
-  END=$(date +%s)
-  TIME_TAKEN=$((END - START))
-  if command -v subdominator >/dev/null 2>&1; then
-    STATUS="success"
-  else
-    STATUS="fail"
-  fi
-  if [[ "$STATUS" == "success" ]]; then
-    OK "subdominator installed in (${TIME_TAKEN}s)"
-  else
-    WARN "subdominator installation failed (${TIME_TAKEN}s)"
-  fi
+  command -v subdominator >/dev/null 2>&1 && STATUS="success"
+  return 0
 }
-INSTALL_SUBDOMINATOR
+RUN_STEP subdominator INSTALL_SUBDOMINATOR
 
 INSTALL_MASSDNS() {
-  START_SPINNER "Installing massdns"
-  START=$(date +%s)
   git clone https://github.com/blechschmidt/massdns.git "/tmp/massdns" > /dev/null 2>&1 || true
-  cd /tmp/massdns
-  make > /dev/null || true
-  sudo make install > /dev/null || true
-  STOP_SPINNER
-  END=$(date +%s)
-  TIME_TAKEN=$((END - START))
-  cp /tmp/massdns/bin/massdns "$BIN_DIR/"
-  rm -rf /tmp/massdns && cd $INSTALL_DIR
-  if command -v massdns >/dev/null 2>&1; then
-    STATUS="success"
-  else
-    STATUS="fail"
+  if [[ -d /tmp/massdns ]]; then
+    # already running as root via REQUIRE_ROOT, so no `sudo` needed here
+    (cd /tmp/massdns && make > /dev/null 2>&1 && make install > /dev/null 2>&1) || true
+    cp /tmp/massdns/bin/massdns "$BIN_DIR/" 2>/dev/null || true
   fi
-  if [[ "$STATUS" == "success" ]]; then
-    OK "massdns installed in (${TIME_TAKEN}s)"
-  else
-    WARN "massdns installation failed (${TIME_TAKEN}s)"
-  fi
+  rm -rf /tmp/massdns
+  cd "$INSTALL_DIR" || true
+  command -v massdns >/dev/null 2>&1 && STATUS="success"
+  return 0
 }
-INSTALL_MASSDNS
+RUN_STEP massdns INSTALL_MASSDNS
 
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
@@ -269,7 +225,7 @@ done
 
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Downloading DNS Resolvers list..."
-wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q
+wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q || true
 if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
   OK "Resolvers list downloaded"
 else
@@ -279,28 +235,34 @@ fi
 # ---------------- PERMISSIONS & SYMLINKS ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Setting Permissions and Symlinks..."
-find "$BIN_DIR" -type f -exec chmod 755 {} +
+# -maxdepth 1: only the installed binaries themselves. Without it this also
+# chmods every file inside the cloned sublist3r repo (its .git objects,
+# README, requirements.txt), none of which should be executable.
+find "$BIN_DIR" -maxdepth 1 -type f -exec chmod 755 {} +
 chmod +x "$INSTALL_DIR/scout" 2>/dev/null || true
 ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
 
 # ---------------- VERIFY INSTALL ----------------
 VERIFY_INSTALL() {
   INFO "Verifying installation integrity..."
+  # NOTE: use ERRORS=$((ERRORS+1)), never ((ERRORS++)) — the latter returns the
+  # pre-increment value, so it exits 1 when ERRORS is 0 and `set -e` would
+  # abort the installer on the very first missing item.
   local ERRORS=0
   for PAIR in "${GO_TOOLS[@]}"; do
     NAME="${PAIR%%|*}"
-    [[ -x "$BIN_DIR/$NAME" ]] || { WARN "Missing binary: $NAME"; ((ERRORS++)); }
+    [[ -x "$BIN_DIR/$NAME" ]] || { WARN "Missing binary: $NAME"; ERRORS=$((ERRORS+1)); }
   done
-  [[ -x "$BIN_DIR/findomain" ]] || { WARN "Findomain missing"; ((ERRORS++)); }
-  [[ -d "$SUBLISTER_DIR" ]] || { WARN "Sublist3r missing"; ((ERRORS++)); }
-  [[ -x "$BIN_DIR/massdns" ]] || { WARN "Massdns missing"; ((ERRORS++)); }
-  [[ -x "$BIN_DIR/subdominator" ]] || { WARN "Subdominator missing"; ((ERRORS++)); }
+  [[ -x "$BIN_DIR/findomain" ]] || { WARN "Findomain missing"; ERRORS=$((ERRORS+1)); }
+  [[ -f "$SUBLISTER_DIR/sublist3r.py" ]] || { WARN "Sublist3r missing"; ERRORS=$((ERRORS+1)); }
+  [[ -x "$BIN_DIR/massdns" ]] || { WARN "Massdns missing"; ERRORS=$((ERRORS+1)); }
+  [[ -x "$BIN_DIR/subdominator" ]] || { WARN "Subdominator missing"; ERRORS=$((ERRORS+1)); }
   for URL in "${WORDLISTS[@]}"; do
     FNAME=$(basename "$URL")
-    [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Wordlist missing: $FNAME"; ((ERRORS++)); }
+    [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Wordlist missing: $FNAME"; ERRORS=$((ERRORS+1)); }
   done
-  [[ -s "$WORDLISTS_DIR/resolvers.txt" ]] || { WARN "Resolvers list missing"; ((ERRORS++)); }
-  [[ -L /usr/local/bin/scout && -x /usr/local/bin/scout ]] || { WARN "Symlink missing or not executable"; ((ERRORS++)); }
+  [[ -s "$WORDLISTS_DIR/resolvers.txt" ]] || { WARN "Resolvers list missing"; ERRORS=$((ERRORS+1)); }
+  [[ -L /usr/local/bin/scout && -x /usr/local/bin/scout ]] || { WARN "Symlink missing or not executable"; ERRORS=$((ERRORS+1)); }
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL

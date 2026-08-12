@@ -2,15 +2,6 @@
 set -euo pipefail
 IFS=$' \t\n'
 
-# ---------------- COLORS ----------------
-BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
-
-# ---------------- LOGGING ----------------
-OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
-INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
-WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
-ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
-
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
 VER="v0.1"
 INSTALL_DIR="${HOME}/scout"
@@ -22,59 +13,32 @@ FORCE=0
 UPDATE=0
 UNINSTALL=0
 
+# ---------------- SCRIPT LOCATION ----------------
+# Resolve where this script actually lives so scout works from any checkout,
+# and survives sudo resetting HOME. readlink -f follows the
+# /usr/local/bin/scout symlink the installer creates.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+CMDS_DIR="${SCRIPT_DIR}/cmd"
+[[ -d "$CMDS_DIR" ]] || CMDS_DIR="${INSTALL_DIR}/cmd"
+
+# ---------------- SHARED LIB (colors, logging, spinner, banner, root check) ----------------
+source "${CMDS_DIR}/lib"
+
 # ---------------- ARGS ----------------
 INPUT_DOMAIN=""
 INPUT_DOMAIN_FILE=""
 INPUT_WILDCARD=""
 INPUT_WILDCARD_FILE=""
 CUSTOM_OUTPUT=""
-
-# ---------------- BANNER ----------------
-BANNER(){
-  ASCII_SCOUT=$(cat <<'EOF'
-    /$$$$$$   /$$$$$$   /$$$$$$  /$$   /$$ /$$$$$$$$
-   /$$__  $$ /$$__  $$ /$$__  $$| $$  | $$|__  $$__/
-  | $$  \__/| $$  \__/| $$  | $$| $$  | $$   | $$
-  |  $$$$$$ | $$      | $$  | $$| $$  | $$   | $$
-   \____  $$| $$      | $$  | $$| $$  | $$   | $$
-   /$$  \ $$| $$    $$| $$  | $$| $$  | $$   | $$
-  |  $$$$$$/|  $$$$$$/|  $$$$$$/|  $$$$$$/   | $$
-   \______/  \______/  \______/  \______/    |__/
-EOF
-  )
-  TAGLINE="Recon Made Easy                  Made By Ghost ${VER}"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-
-  while IFS= read -r LINE; do
-    for ((i=0;i<${#LINE};i++)); do
-      printf "${HIGH_GREEN}${BOLD}%c${RESET}" "${LINE:i:1}"
-      sleep 0.0005
-    done
-    printf "\n"
-  done <<< "$ASCII_SCOUT"
-
-  for ((i=0;i<${#TAGLINE};i++)); do
-    printf "${CYAN}${BOLD}%c${RESET}" "${TAGLINE:i:1}"
-    sleep 0.001
-  done
-  printf "\n"
-  echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-}
-
-# ---------------- REQUIRE ROOT ----------------
-REQUIRE_ROOT() {
-  if (( EUID != 0 )); then
-    echo -e "${RED}[X] Root privileges required.${RESET}"
-    echo -e "${YELLOW}[*] Re-running with sudo...${RESET}\n"
-    exec sudo -E bash "$0" "$@"  # Preserve env and args
-  fi
-}
+INPUT_DOMAIN_ALL_FILE=""
+INPUT_WILDCARD_ALL_FILE=""
+RESOLVED_OUT=""
 
 # ---------------- HELP ----------------
 USAGE() {
   cat <<EOF
 Usage: scout [options]
-You can provide single or multiple comma-separated values for -dt and -wd:
+You can provide single or multiple comma-separated values for -dm and -wc:
   -dm   <domain1.com,domain2.com,...>        One or more domains
   -df   <file>                               File with one domain per line
   -wc   <*.domain1.com,*.domain2.com,...>    One or more wildcard domains
@@ -86,7 +50,7 @@ Optional:
 Examples:
   scout -dm example.com
   scout -dm example.com -o <output_dir_name>
-  scout -dm ex1.com,ex2.com -wd *.ex.com,*.ex2.com
+  scout -dm ex1.com,ex2.com -wc *.ex.com,*.ex2.com
   scout -wc *.example.com
   scout -df domains.txt
   scout -df domains.txt -wf wildcards.txt
@@ -112,13 +76,13 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -dm)
-      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -dd requires argument(s)."; USAGE; }
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -dm requires argument(s)."; USAGE; }
       INPUT_DOMAIN="$2"; shift 2;;
     -df)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -df requires a file path."; USAGE; }
       INPUT_DOMAIN_FILE="$2"; shift 2;;
     -wc)
-      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wd requires argument(s)."; USAGE; }
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wc requires argument(s)."; USAGE; }
       INPUT_WILDCARD="$2"; shift 2;;
     -wf)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wf requires a file path."; USAGE; }
@@ -170,6 +134,12 @@ done
 CURRENTDATE=$(date +"%Y-%m-%d_%H-%M-%S")
 if [[ -n "$CUSTOM_OUTPUT" ]]; then
   SANITIZED_OUTPUT=$(echo "$CUSTOM_OUTPUT" | tr -cd '[:alnum:]_-')
+  # An all-punctuation name sanitizes to empty, which would dump results into
+  # the workspace root — fall back to the timestamped default.
+  if [[ -z "$SANITIZED_OUTPUT" ]]; then
+    WARN "Output name '$CUSTOM_OUTPUT' contains no usable characters; using default."
+    SANITIZED_OUTPUT="output_$CURRENTDATE"
+  fi
   OUTPUT_DIR="$WORKSPACE_DIR/$SANITIZED_OUTPUT"
 else
   OUTPUT_DIR="$WORKSPACE_DIR/output_$CURRENTDATE"
@@ -185,28 +155,6 @@ CLEANUP() {
 }
 trap CLEANUP SIGINT SIGTERM EXIT
 
-START_SPINNER() {
-  processing="$1"
-  SPIN_START=$(date +%s)
-  BRAILLE=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-  while true; do
-    ELAPSED=$(( $(date +%s) - SPIN_START ))
-    for char in "${BRAILLE[@]}"; do
-      printf "\r${YELLOW}[${char}]${RESET} ${processing} ${CYAN}(${ELAPSED}s)${RESET}"
-      sleep 0.07
-    done
-  done &
-  SPINNER_PID=$!
-}
-
-STOP_SPINNER() {
-  if [[ -n "${SPINNER_PID:-}" ]]; then
-    kill "$SPINNER_PID" 2>/dev/null || true
-    wait "$SPINNER_PID" 2>/dev/null || true
-    echo -ne "\r\033[K"
-  fi
-}
-
 # ---------------- BASIC CHECKS ----------------
 CHECK_INTERNET(){
   INFO "Checking internet connectivity..."
@@ -219,56 +167,68 @@ CHECK_INTERNET(){
 }
 
 CHECK_BINS(){
-  REQUIRED=(subfinder assetfinder findomain subdog gau waybackurls cero xsubfind3r unfurl gf httpx unfurl dnsx massdns puredns ffuf nuclei naabu)
+  REQUIRED=(subfinder assetfinder findomain subdog gau waybackurls cero xsubfind3r unfurl gf httpx dnsx massdns puredns ffuf nuclei naabu subdominator)
   MISSING=()
   for b in "${REQUIRED[@]}"; do
     if ! command -v "$b" >/dev/null 2>&1 && [[ ! -x "$BIN_DIR/$b" ]]; then
       MISSING+=("$b")
     fi
   done
+  # sublist3r is a cloned python repo, not a binary — a bare -x test on the
+  # directory always passes, so check for the script itself.
+  [[ -f "$BIN_DIR/sublist3r/sublist3r.py" ]] || MISSING+=(sublist3r)
+
   if (( ${#MISSING[@]} > 0 )); then
     ERR "Missing tools: ${MISSING[*]}"
-    exit 1
+    # `return`, not `exit`: the caller uses `CHECK_BINS || true` to keep this
+    # advisory. `exit` would terminate the whole script regardless of `||`.
+    return 1
   fi
   OK "All required tools found"
 }
 
 # ---------------- INPUT VALIDATION ----------------
 if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -z "$INPUT_WILDCARD_FILE" ]]; then
-  ERR "No input provided. Use -dd, -df, -wd, -wf."
+  ERR "No input provided. Use -dm, -df, -wc, -wf."
   USAGE
 fi
 
 # ---------------- BUILD TARGETS ----------------
-if [[ -n "${INPUT_DOMAIN:-}" || -n "${INPUT_DOMAIN_FILE:-}" ]]; then
-    INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
-    : > "$INPUT_DOMAIN_ALL_FILE"
+# Merge a comma-separated list and/or a file of targets into one deduped file.
+# The domain and wildcard paths were byte-for-byte identical apart from their
+# variable names. Trimming is done with parameter expansion rather than
+# `printf | sed`, and blank entries (e.g. "a.com,,b.com") are dropped instead
+# of becoming empty lines that later stages have to skip.
+BUILD_TARGET_LIST() {
+  local OUT_FILE="$1" CSV="$2" SRC_FILE="$3"
+  : > "$OUT_FILE"
 
-    [[ -n "${INPUT_DOMAIN:-}" ]] &&
-        IFS=',' read -ra arr <<< "$INPUT_DOMAIN" &&
-        printf "%s\n" "${arr[@]}" | sed 's/^[ \t]*//;s/[ \t]*$//' >> "$INPUT_DOMAIN_ALL_FILE"
+  if [[ -n "$CSV" ]]; then
+    local ITEMS ITEM
+    IFS=',' read -ra ITEMS <<< "$CSV"
+    for ITEM in "${ITEMS[@]}"; do
+      ITEM="${ITEM#"${ITEM%%[![:space:]]*}"}"   # strip leading whitespace
+      ITEM="${ITEM%"${ITEM##*[![:space:]]}"}"   # strip trailing whitespace
+      [[ -n "$ITEM" ]] && printf '%s\n' "$ITEM"
+    done >> "$OUT_FILE"
+  fi
 
-    [[ -n "${INPUT_DOMAIN_FILE:-}" ]] &&
-        awk 'NF && $1 !~ /^#/' "$INPUT_DOMAIN_FILE" >> "$INPUT_DOMAIN_ALL_FILE"
+  if [[ -n "$SRC_FILE" ]]; then
+    awk 'NF && $1 !~ /^#/' "$SRC_FILE" >> "$OUT_FILE"
+  fi
 
-    sort -u "$INPUT_DOMAIN_ALL_FILE" -o "$INPUT_DOMAIN_ALL_FILE"
+  sort -u "$OUT_FILE" -o "$OUT_FILE"
+}
+
+if [[ -n "$INPUT_DOMAIN" || -n "$INPUT_DOMAIN_FILE" ]]; then
+  INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
+  BUILD_TARGET_LIST "$INPUT_DOMAIN_ALL_FILE" "$INPUT_DOMAIN" "$INPUT_DOMAIN_FILE"
 fi
 
-if [[ -n "${INPUT_WILDCARD:-}" || -n "${INPUT_WILDCARD_FILE:-}" ]]; then
-    INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
-    : > "$INPUT_WILDCARD_ALL_FILE"
-
-    [[ -n "${INPUT_WILDCARD:-}" ]] &&
-        IFS=',' read -ra arr <<< "$INPUT_WILDCARD" &&
-        printf "%s\n" "${arr[@]}" | sed 's/^[ \t]*//;s/[ \t]*$//' >> "$INPUT_WILDCARD_ALL_FILE"
-
-    [[ -n "${INPUT_WILDCARD_FILE:-}" ]] &&
-        awk 'NF && $1 !~ /^#/' "$INPUT_WILDCARD_FILE" >> "$INPUT_WILDCARD_ALL_FILE"
-
-    sort -u "$INPUT_WILDCARD_ALL_FILE" -o "$INPUT_WILDCARD_ALL_FILE"
+if [[ -n "$INPUT_WILDCARD" || -n "$INPUT_WILDCARD_FILE" ]]; then
+  INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+  BUILD_TARGET_LIST "$INPUT_WILDCARD_ALL_FILE" "$INPUT_WILDCARD" "$INPUT_WILDCARD_FILE"
 fi
-
-_trim(){ local v="$*"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
 
 # ---------------- SUMMARY ----------------
 echo -e "${BOLD}${CYAN}─────────────────────────── SCOUT RUN SUMMARY ───────────────────────────${RESET}"
@@ -276,21 +236,24 @@ INFO "Input Domain: ${INPUT_DOMAIN:-None}"
 INFO "Input Domain File: ${INPUT_DOMAIN_FILE:-None}"
 INFO "Input Wildcards: ${INPUT_WILDCARD:-None}"
 INFO "Input Wildcards File: ${INPUT_WILDCARD_FILE:-None}"
-echo -e ""
-if [[ -s "$OUTPUT_DIR/domains_all.txt" ]]; then
-  INFO "Domains to scan from -dd/-df: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" || echo 0)"
-  INFO "Total unique domains to scan: $(wc -l < "$INPUT_DOMAIN_ALL_FILE" | awk '{s+=$1} END {print s}' || echo 0)"
-else 
-  INFO "No domains to scan from -dd/-df."
-fi
-echo -e ""
 
-if [[ -s "$OUTPUT_DIR/wildcards_all.txt" ]]; then
-  INFO "Wildcards to scan from -wd/-wf: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" || echo 0)"
-  INFO "Total unique wildcards to scan: $(wc -l < "$INPUT_WILDCARD_ALL_FILE" | awk '{s+=$1} END {print s}' || echo 0)"
-else 
-  INFO "No wildcard domains to scan from -wd/-wf."
-fi
+# Both summary blocks were identical apart from their labels. The count is
+# computed once now instead of running `wc` twice plus an `awk` that only ever
+# summed a single number.
+SUMMARIZE_TARGETS() {
+  local LABEL="$1" UNIQ_NOUN="$2" NONE_NOUN="$3" FLAGS="$4" FILE="$5"
+  echo -e ""
+  if [[ -s "$FILE" ]]; then
+    local N
+    N=$(COUNT_LINES "$FILE")
+    INFO "${LABEL} to scan from ${FLAGS}: ${N}"
+    INFO "Total unique ${UNIQ_NOUN} to scan: ${N}"
+  else
+    INFO "No ${NONE_NOUN} to scan from ${FLAGS}."
+  fi
+}
+SUMMARIZE_TARGETS "Domains"   "domains"   "domains"          "-dm/-df" "$INPUT_DOMAIN_ALL_FILE"
+SUMMARIZE_TARGETS "Wildcards" "wildcards" "wildcard domains" "-wc/-wf" "$INPUT_WILDCARD_ALL_FILE"
 echo -e "${RESET}"
 
 INFO "Output Directory: $OUTPUT_DIR"
@@ -306,8 +269,7 @@ EOF
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
 # ---------------- LOAD EXTERNAL COMMANDS ----------------
-CMDS_DIR="${INSTALL_DIR}"/cmd
-
+# CMDS_DIR is resolved at the top of this script.
 SOURCE_CMD() {
   local func="$1"
   local script="${CMDS_DIR}/${func}"
@@ -315,8 +277,10 @@ SOURCE_CMD() {
     source "$script"
     OK "Loaded ${script}"
   else
+    # Stub must be named for the FUNCTION scout calls (uppercase), not the file.
+    local stub="${func^^}"
     WARN "Missing ${script} — using fallback stub."
-    eval "${func}(){ INFO \"${func}: not implemented (stub)\"; }"
+    eval "${stub}(){ INFO \"${func}: not implemented (stub)\"; }"
   fi
 }
 SOURCE_CMD "collect_subdomains"
@@ -333,46 +297,58 @@ CHECK_INTERNET
 CHECK_BINS || true
 
 # Collect subdomains for each domain
+COMBINED_SUBS="$OUTPUT_DIR/subdomains/combined_subdomains.txt"
 if [[ -f "$INPUT_WILDCARD_ALL_FILE" ]]; then
-  while read -r DOMAIN; do  
+  while read -r DOMAIN; do
     echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
-    DOMAIN=$(echo "$DOMAIN" | tr -d '[:space:]')
+    DOMAIN="${DOMAIN//[[:space:]]/}"   # pure bash; was `echo | tr` (2 forks/domain)
     [[ -z "$DOMAIN" ]] && continue
     echo -e "Processing target for Subdomain Enumeration: ${BOLD}$DOMAIN${RESET}"
-    SAFE_NAME="${DOMAIN//\*/WILDCARD}"
-    SAFE_NAME="${SAFE_NAME//\//_}"
-    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/subdomains/${SAFE_NAME}"
+    DOMAIN_OUTPUT_DIR="$OUTPUT_DIR/subdomains/$(SAFE_NAME "$DOMAIN")"
     mkdir -p "$DOMAIN_OUTPUT_DIR"
     export DOMAIN DOMAIN_OUTPUT_DIR
     COLLECT_SUBDOMAINS
   done < "$INPUT_WILDCARD_ALL_FILE"
-  find "$OUTPUT_DIR/subdomains" -type f -name "all_subdomains.txt" -exec cat {} + > "$OUTPUT_DIR/subdomains/combined_subdomains.txt" 2>/dev/null || true
-  COUNT=$(wc -l < "$OUTPUT_DIR/subdomains/combined_subdomains.txt" || echo 0)
+  # sort -u: without it this is a raw concatenation and the count below
+  # double-counts hosts found under overlapping wildcards.
+  find "$OUTPUT_DIR/subdomains" -type f -name "all_subdomains.txt" -exec cat {} + 2>/dev/null |
+    sort -u > "$COMBINED_SUBS" || true
+  COUNT=$(COUNT_LINES "$COMBINED_SUBS")
   INFO "Total unique subdomains of all wildcards: $COUNT"
-  INFO "Combined subdomains saved to: $OUTPUT_DIR/subdomains/combined_subdomains.txt"
+  INFO "Combined subdomains saved to: $COMBINED_SUBS"
   echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 else
   WARN "No wildcard domains provided; skipping subdomain collection."
 fi
 
-# Collect live hosts from collected subdomains
-if [[ -s "$OUTPUT_DIR/subdomains/combined_subdomains.txt" ]]; then
-  mkdir -p "$OUTPUT_DIR/resolved"
+# Resolve live hosts. Input is the enumerated subdomains (wildcards only) plus
+# any plain -dm/-df domains, which are resolved but never enumerated.
+mkdir -p "$OUTPUT_DIR/resolved"
+RESOLVE_INPUT="$OUTPUT_DIR/resolved/resolve_input.txt"
+# Owned here rather than re-derived inside cmd/collect_live, so the path is
+# written down in exactly one place.
+RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
+cat "$COMBINED_SUBS" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" 2>/dev/null |
+  sort -u > "$RESOLVE_INPUT" || true
+
+if [[ -s "$RESOLVE_INPUT" ]]; then
+  export RESOLVE_INPUT RESOLVED_OUT
   COLLECT_LIVE
-  RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
   echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+else
+  WARN "Nothing to resolve; skipping live host discovery."
 fi
 
-# Combine all subdomains into final_subdomains.out
-cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" | sort -u > "$OUTPUT_DIR/final_subdomains.out" 2>/dev/null || true
-COUNT=$(wc -l < "$OUTPUT_DIR/final_subdomains.out" || echo 0)
+# Combine into final_subdomains.out. Plain domains are included even if
+# resolution was skipped or failed, so they're never silently dropped.
+cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" 2>/dev/null | sort -u > "$OUTPUT_DIR/final_subdomains.out" || true
+COUNT=$(COUNT_LINES "$OUTPUT_DIR/final_subdomains.out")
 INFO "Total unique subdomains collected: $COUNT"
 INFO "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
-# Collect JS files from live hosts
-# while read -r DOMAIN; do
-#   COLLECT_JS
+# TODO: JS collection (cmd/collect_js) is implemented but not yet wired into
+# the pipeline. It expects INPUT_WILDCARD_ALL_FILE and writes to $OUTPUT_DIR/js.
 
 echo -e "${BOLD}${GREEN}Scout run completed.${RESET}"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"

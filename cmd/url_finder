@@ -3,23 +3,40 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- URL COLLECTION ----------------
+# gau and waybackurls query unrelated archives, so they run concurrently.
+# `|| true` keeps a single failing source from aborting the run under `set -e`.
+_URL_GAU()     { "$BIN_DIR/gau" "$DOMAIN" > "$URL_DIR/gau.out" 2>/dev/null || true; }
+_URL_WAYBACK() { "$BIN_DIR/waybackurls" "$DOMAIN" > "$URL_DIR/wayback.out" 2>/dev/null || true; }
+
 COLLECT_URLS(){
+  RAW_DIR="$OUTPUT_DIR/urls"
   mkdir -p "$RAW_DIR"
-  while read -r domain; do
-    domain=$(echo "$domain" | tr -d '[:space:]')
-    [ -z "$domain" ] && continue
-    INFO "Collecting URLs for $domain"
-    mkdir -p "$RAW_DIR/$domain"
-    INFO "gau" && "$BIN_DIR/gau" "$domain" > "$RAW_DIR/$domain/gau.out"
-    INFO "waybackurls" && "$BIN_DIR/waybackurls" "$domain" > "$RAW_DIR/$domain/wayback.out"
-  done < "$WILDCARDS"
+
+  local RUNNERS=(_URL_GAU _URL_WAYBACK)
+  local RUNNER PID PIDS
+
+  while read -r DOMAIN; do
+    DOMAIN="${DOMAIN//[[:space:]]/}"
+    [[ -z "$DOMAIN" ]] && continue
+    INFO "Collecting URLs for $DOMAIN"
+    URL_DIR="$RAW_DIR/$(SAFE_NAME "$DOMAIN")"
+    mkdir -p "$URL_DIR"
+    export DOMAIN URL_DIR
+
+    PIDS=()
+    for RUNNER in "${RUNNERS[@]}"; do
+      "$RUNNER" &
+      PIDS+=("$!")
+    done
+    START_SPINNER "Running ${#RUNNERS[@]} URL collection tools in parallel on $DOMAIN"
+    for PID in "${PIDS[@]}"; do
+      wait "$PID" || true
+    done
+    STOP_SPINNER
+  done < "$INPUT_WILDCARD_ALL_FILE"
 
   # after all tools finished for all domains, combine into single file
   ALL_URLS_FILE="$RAW_DIR/all_urls.out"
-  > "$ALL_URLS_FILE"
-  for d in "$RAW_DIR"/*; do
-    [[ -d "$d" ]] || continue
-    cat "$d"/*.out 2>/dev/null || true
-  done | sort -u > "$ALL_URLS_FILE" || true
-  OK "Collected all URLs -> $ALL_URLS_FILE"
+  cat "$RAW_DIR"/*/*.out 2>/dev/null | sort -u > "$ALL_URLS_FILE" || true
+  OK "Collected all URLs -> $ALL_URLS_FILE ($(COUNT_LINES "$ALL_URLS_FILE") URLs)"
 }
