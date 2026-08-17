@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- SEED / ASN EXPANSION (asnmap + amass intel) ----------------
+# The top of TBHM's funnel: from a known root, discover the org's ASNs / CIDR
+# ranges and related root domains, widening the asset surface beyond a single
+# apex. This is powerful and also the easiest way to wander OUT OF SCOPE, so
+# this stage is deliberately REVIEW-ONLY:
+#   * opt-in via SCOUT_ASN=1,
+#   * output goes to scope_expansion/ and is NEVER fed into the probing/scanning
+#     stages automatically.
+# The operator reviews the leads and, only for assets confirmed in scope, adds
+# them to the next run's -dm/-wc. Nothing here is scanned.
+ASN_EXPAND(){
+  local ADIR="$OUTPUT_DIR/scope_expansion"; mkdir -p "$ADIR"
+  local CIDRS="$ADIR/asn_cidrs.txt" RELATED="$ADIR/related_domains.txt"
+  : > "$CIDRS"; : > "$RELATED"
+
+  WARN "ASN expansion is REVIEW-ONLY — these are leads, not scanned."
+  WARN "Confirm each asset is in your program's scope before ever testing it."
+
+  # mapfile, not `[[ -s f ]] && while read...`: a while loop's exit status is
+  # its last body command's, so a trailing blank line would make that `&&` list
+  # return non-zero and abort under set -e. mapfile always returns 0 and the
+  # seed files are already PREP_LIST'd (no blank lines) anyway.
+  local SEEDS=() f d
+  for f in "${INPUT_DOMAIN_ALL_FILE:-}" "${INPUT_WILDCARD_BASE_FILE:-}"; do
+    [[ -s "$f" ]] || continue
+    mapfile -t -O "${#SEEDS[@]}" SEEDS < "$f"
+  done
+  if (( ${#SEEDS[@]} == 0 )); then
+    WARN "No seed domains for ASN expansion."
+    return 0
+  fi
+
+  # asnmap: apex -> owning ASNs / CIDR ranges.
+  local AB; AB="$(TOOL_PATH asnmap || true)"
+  if [[ -n "$AB" ]]; then
+    START_SPINNER "asnmap over ${#SEEDS[@]} seed domain(s)"
+    for d in "${SEEDS[@]}"; do
+      "$AB" -d "$d" -silent 2>/dev/null >> "$CIDRS" || true
+    done
+    STOP_SPINNER
+    sort -u "$CIDRS" -o "$CIDRS" 2>/dev/null || true
+    OK "ASN / CIDR leads: $(COUNT_LINES "$CIDRS") -> $CIDRS (review-only)"
+    REC_TOOL "asnmap" "${ELAPSED:-0}" "$(COUNT_LINES "$CIDRS")" "asnmap -d <seed> -silent"
+  else
+    WARN "asnmap not installed — skipping CIDR discovery (run 'scout install --update')."
+  fi
+
+  # amass intel -whois: related root domains under the same registrant.
+  if HAVE_TOOL amass; then
+    START_SPINNER "amass intel (whois) over seed domain(s)"
+    for d in "${SEEDS[@]}"; do
+      timeout "${SCOUT_ASN_TIMEOUT:-120}" amass intel -d "$d" -whois 2>/dev/null >> "$RELATED" || true
+    done
+    STOP_SPINNER
+    # Scope the raw intel through the host gate so only real hostnames survive.
+    PREP_LIST "$RELATED" "Related-domain leads"
+    [[ -s "$RELATED" ]] && OK "Related-domain leads: $(COUNT_LINES "$RELATED") -> $RELATED (review-only)"
+    REC_TOOL "amass intel" "${ELAPSED:-0}" "$(COUNT_LINES "$RELATED")" "amass intel -d <seed> -whois"
+  fi
+  return 0
+}

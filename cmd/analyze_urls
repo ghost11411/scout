@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- URL ANALYSIS (gf + unfurl) ----------------
+# Passive triage of the URLs already collected by cmd/collect_urls. Nothing
+# here touches the target — it only sorts a pile of archived URLs into the
+# buckets a hunter actually looks at first:
+#   urls/gf/<category>.txt  — URLs whose parameters match a known bug class
+#                             (xss, ssrf, sqli, redirect, lfi, rce, ssti, idor).
+#                             This is the classic waybackurls|gf pipeline from
+#                             every recon methodology, run over the whole set.
+#   urls/param_keys.txt     — the distinct parameter names seen (unfurl keys).
+#   urls/url_domains.txt     — the distinct hosts seen in those URLs.
+#
+# gf hardcodes its pattern dir to the euid's passwd home + /.gf and ignores $HOME
+# and GF_PATTERNS. To keep the pattern FILES under /opt/scout, scout stores them
+# in $GF_HOME/.gf and symlinks the passwd-home .gf (e.g. /root/.gf) to that store
+# via GF_LINK_HOME (cmd/lib). _SYNC_GF_PATTERNS does both on demand, so the stage
+# self-heals even if the install predates the installer step. When GF_HOME is
+# unset (stage sourced in isolation for testing) it falls back to populating the
+# passwd-home .gf directly, with no symlink.
+_SYNC_GF_PATTERNS(){
+  local SRC="$WORDLISTS_DIR/GF-Patterns" f STORE
+  [[ -d "$SRC" ]] || return 0
+  if [[ -n "${GF_HOME:-}" ]]; then
+    STORE="$GF_HOME/.gf"
+  else
+    STORE="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)/.gf"
+    [[ "$STORE" == "/.gf" ]] && STORE="$HOME/.gf"
+  fi
+  mkdir -p "$STORE"
+  for f in "$SRC"/*.json; do
+    [[ -f "$f" ]] || continue
+    cp -n "$f" "$STORE/" 2>/dev/null || true
+  done
+  [[ -n "${GF_HOME:-}" ]] && GF_LINK_HOME "$STORE"
+  return 0
+}
+
+ANALYZE_URLS(){
+  local URLS="${ANALYZE_URLS_INPUT:-$OUTPUT_DIR/urls/all_urls.out}"
+  local ADIR="$OUTPUT_DIR/urls"
+
+  if [[ ! -s "$URLS" ]]; then
+    WARN "No collected URLs to analyze (run URL collection first)."
+    return 0
+  fi
+  local _AZ_START; NOW _AZ_START
+
+  # --- unfurl: parameter keys + host inventory ---
+  local UNF; UNF="$(TOOL_PATH unfurl || true)"
+  if [[ -n "$UNF" ]]; then
+    "$UNF" keys    < "$URLS" 2>/dev/null | sort -u > "$ADIR/param_keys.txt"  || true
+    "$UNF" domains < "$URLS" 2>/dev/null | sort -u > "$ADIR/url_domains.txt" || true
+    OK "unfurl: $(COUNT_LINES "$ADIR/param_keys.txt") param key(s), $(COUNT_LINES "$ADIR/url_domains.txt") host(s)"
+  else
+    WARN "unfurl not installed — skipping parameter/host extraction."
+  fi
+
+  # --- gf: bucket URLs into vuln-candidate categories ---
+  local GFB; GFB="$(TOOL_PATH gf || true)"
+  if [[ -n "$GFB" ]]; then
+    _SYNC_GF_PATTERNS
+    local GFDIR="$ADIR/gf"; mkdir -p "$GFDIR"
+    local CATS=(xss ssrf sqli redirect lfi rce ssti idor interestingparams)
+    local c cnt total=0
+    for c in "${CATS[@]}"; do
+      # gf reads stdin; a pattern that matches nothing exits non-zero -> || true.
+      "$GFB" "$c" < "$URLS" 2>/dev/null | sort -u > "$GFDIR/$c.txt" || true
+      cnt=$(COUNT_LINES "$GFDIR/$c.txt")
+      if (( cnt > 0 )); then
+        INFO "gf $c: $cnt candidate URL(s)"
+        total=$((total + cnt))
+      else
+        rm -f "$GFDIR/$c.txt"   # don't leave a litter of empty files
+      fi
+    done
+    OK "gf triage: $total candidate URL(s) across categories -> $GFDIR"
+    local _AZ_END; NOW _AZ_END
+    REC_TOOL "gf + unfurl (url triage)" "$(( _AZ_END - _AZ_START ))" "$total" \
+      "gf {xss,ssrf,sqli,redirect,lfi,rce,ssti,idor} + unfurl keys/domains < all_urls.out"
+  else
+    WARN "gf not installed — skipping URL categorization."
+  fi
+  return 0
+}

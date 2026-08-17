@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- CONTENT DISCOVERY (ffuf) ----------------
+# Directory/file brute force against the live hosts, the "content discovery" step
+# in TBHM. ACTIVE and by nature noisy (many requests per host), so it is:
+#   * opt-in  — only runs when SCOUT_FFUF=1,
+#   * paced   — a global request rate (SCOUT_FFUF_RATE, default 40/s) so it does
+#               not hammer a target,
+#   * bounded — at most SCOUT_FFUF_HOST_LIMIT hosts per run,
+#   * polite  — sends the identifying SCOUT_UA.
+# These defaults keep it inside "don't harm the target" territory; raise them
+# deliberately, per program, if the rules of engagement allow.
+CONTENT_DISCOVERY(){
+  local IN="${FFUF_INPUT:-${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}}"
+  [[ -s "$IN" ]] || IN="$OUTPUT_DIR/final_subdomains.out"
+  if [[ ! -s "$IN" ]]; then
+    WARN "No live hosts for content discovery."
+    return 0
+  fi
+  local FB; FB="$(TOOL_PATH ffuf || true)"
+  if [[ -z "$FB" ]]; then
+    WARN "ffuf not installed — skipping content discovery (run 'scout install --update')."
+    return 0
+  fi
+  # Default to OneListForAll (six2dez) — the curated best-in-class
+  # content-discovery list the installer downloads — and fall back to
+  # raft-large-directories if it wasn't fetched. SCOUT_FFUF_WORDLIST overrides.
+  local WL="${SCOUT_FFUF_WORDLIST:-}"
+  if [[ -z "$WL" ]]; then
+    local cand
+    for cand in "$WORDLISTS_DIR/onelistforallmicro.txt" "$WORDLISTS_DIR/raft-large-directories.txt"; do
+      [[ -s "$cand" ]] && { WL="$cand"; break; }
+    done
+  fi
+  if [[ -z "$WL" || ! -s "$WL" ]]; then
+    WARN "No content-discovery wordlist found (looked for onelistforallmicro.txt / raft-large-directories.txt in $WORDLISTS_DIR) — skipping."
+    return 0
+  fi
+  INFO "Content-discovery wordlist: $WL ($(COUNT_LINES "$WL") entries)"
+
+  local FDIR="$OUTPUT_DIR/content"; mkdir -p "$FDIR"
+  local RATE="${SCOUT_FFUF_RATE:-40}" THREADS="${SCOUT_FFUF_THREADS:-20}"
+  local UA="${SCOUT_UA:-scout-recon}"
+  local MC="${SCOUT_FFUF_MATCH:-200,204,301,302,307,401,403,405,500}"
+  local LIMIT="${SCOUT_FFUF_HOST_LIMIT:-50}"
+  local url safe n=0
+
+  while read -r url; do
+    [[ -n "$url" ]] || continue
+    if (( n >= LIMIT )); then
+      WARN "Content-discovery host cap ($LIMIT) reached; stopping. Raise SCOUT_FFUF_HOST_LIMIT to go further."
+      break
+    fi
+    n=$((n + 1))
+    case "$url" in http*://*) ;; *) url="https://$url";; esac
+    safe=$(SAFE_NAME "$url")
+    START_SPINNER "[$n] ffuf $url (rate ${RATE}/s)"
+    "$FB" -u "${url%/}/FUZZ" -w "$WL" -mc "$MC" -rate "$RATE" -t "$THREADS" \
+      -H "User-Agent: $UA" -timeout 10 -se -of json -o "$FDIR/${safe}.json" -s \
+      > /dev/null 2>&1 || true
+    STOP_SPINNER
+    local hits=0
+    if HAVE_TOOL jq && [[ -s "$FDIR/${safe}.json" ]]; then
+      hits=$(jq '.results | length' "$FDIR/${safe}.json" 2>/dev/null || echo 0)
+    fi
+    REC_TOOL "ffuf" "${ELAPSED:-0}" "$hits" "ffuf -u ${url%/}/FUZZ -w $(basename "$WL") -mc $MC -rate $RATE"
+  done < "$IN"
+  OK "Content discovery complete over ${n} host(s) -> $FDIR"
+  return 0
+}

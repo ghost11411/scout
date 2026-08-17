@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- HTTP PROBING (httpx) ----------------
+# The pivot from "DNS resolves" to "a live web service actually answers here",
+# and the step every published bug-bounty methodology puts immediately after
+# subdomain resolution (TBHM, ProjectDiscovery's own subfinder->httpx->nuclei
+# flow). dnsx upstream proves a name resolves; httpx proves something is
+# listening and fingerprints it (status, title, tech, server, CDN).
+#
+# Two things come out of this stage:
+#   http/live_hosts.txt  — one live URL per line (scheme://host[:port]). This is
+#                          the CLEAN FEED the vuln stages (nuclei) consume: a
+#                          host that no longer answers HTTP is dropped here
+#                          instead of wasting a scan slot downstream.
+#   http/httpx.txt       — the same hosts enriched for human triage.
+#
+# NB: live_hosts.txt holds URLs, not bare hostnames, so it deliberately does
+# NOT go through the PREP_LIST host gate (which would strip the scheme). The
+# input list does, because it is a host list.
+COLLECT_HTTP(){
+  local IN="${HTTP_INPUT:-$OUTPUT_DIR/final_subdomains.out}"
+  local HDIR="$OUTPUT_DIR/http"
+  local LIVE="$HDIR/live_hosts.txt"
+  mkdir -p "$HDIR"
+  # Exported so scout and the nuclei stage locate the feed in exactly one place.
+  export HTTP_LIVE="$LIVE"
+
+  if [[ ! -s "$IN" ]]; then
+    WARN "No hosts to probe for live HTTP services."
+    return 0
+  fi
+
+  local HTTPX_BIN
+  HTTPX_BIN="$(TOOL_PATH httpx || true)"
+  if [[ -z "$HTTPX_BIN" ]]; then
+    WARN "httpx not installed — skipping HTTP probing (run 'scout install --update')."
+    return 0
+  fi
+
+  # This stage accepts a caller-supplied HTTP_INPUT, so it gates its own input
+  # rather than trusting the caller. Cheap and idempotent on an already-clean
+  # list. (The gate runs on the host list, never on live_hosts.txt below.)
+  PREP_LIST "$IN" "HTTP probe input"
+  [[ -s "$IN" ]] || { WARN "Nothing to probe after validation."; return 0; }
+
+  local THREADS="${SCOUT_HTTPX_THREADS:-50}" RL="${SCOUT_HTTPX_RATELIMIT:-150}"
+  # Extra ports widen coverage (8080/8443/...) at the cost of more requests;
+  # off by default, opt in with SCOUT_HTTPX_PORTS="80,443,8080,8443,8000,8888".
+  local PORTS_ARG=(); [[ -n "${SCOUT_HTTPX_PORTS:-}" ]] && PORTS_ARG=(-ports "$SCOUT_HTTPX_PORTS")
+  # Identify the scanner. Programs increasingly ask researchers to send a known
+  # UA (often with their handle); SCOUT_UA carries it to every target-touching
+  # tool. -random-agent would override -H, so only one is used.
+  local UA_ARG=(-random-agent)
+  [[ -n "${SCOUT_UA:-}" ]] && UA_ARG=(-H "User-Agent: ${SCOUT_UA}")
+
+  # Pass A — the clean feed: just the live URLs, one per line.
+  START_SPINNER "Probing $(COUNT_LINES "$IN") hosts for live HTTP services"
+  "$HTTPX_BIN" -l "$IN" -silent -no-color "${UA_ARG[@]}" \
+    -t "$THREADS" -rate-limit "$RL" -timeout 10 "${PORTS_ARG[@]}" \
+    -o "$LIVE" > /dev/null 2>&1 || true
+  STOP_SPINNER
+  local LIVE_COUNT; LIVE_COUNT=$(COUNT_LINES "$LIVE")
+  OK "Live web hosts: $LIVE_COUNT -> $LIVE"
+  REC_TOOL "httpx (probe)" "${ELAPSED:-0}" "$LIVE_COUNT" \
+    "httpx -l final_subdomains.out -silent -t $THREADS -rate-limit $RL"
+
+  # Pass B — enriched fingerprint table for human triage. Runs over the smaller
+  # live set, not the full input, so the expensive columns only touch hosts that
+  # actually answered.
+  if [[ -s "$LIVE" ]]; then
+    START_SPINNER "Fingerprinting $LIVE_COUNT live hosts"
+    "$HTTPX_BIN" -l "$LIVE" -silent -no-color "${UA_ARG[@]}" \
+      -status-code -title -tech-detect -web-server -cdn \
+      -t "$THREADS" -rate-limit "$RL" -timeout 10 \
+      -o "$HDIR/httpx.txt" > /dev/null 2>&1 || true
+    STOP_SPINNER
+    INFO "Fingerprints -> $HDIR/httpx.txt"
+    REC_TOOL "httpx (fingerprint)" "${ELAPSED:-0}" "$(COUNT_LINES "$HDIR/httpx.txt")" \
+      "httpx -l live_hosts.txt -status-code -title -tech-detect -web-server -cdn"
+  fi
+  return 0
+}

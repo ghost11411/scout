@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- PARAMETER DISCOVERY (arjun + archived params) ----------------
+# Builds the parameterized-URL corpus every injection stage (XSS, LFI, SQLi,
+# SSRF, open-redirect) tests against. Two sources:
+#   1. Archived parameters — every URL with a query string that gau/waybackurls
+#      already collected, deduped by endpoint+param signature with qsreplace.
+#      This is passive (from archives) and is the bulk of the corpus.
+#   2. Hidden parameters — arjun actively probes a bounded set of live hosts for
+#      parameters that are accepted but never linked (the classic source of
+#      "undocumented" IDOR/SSRF bugs). This touches the target, so the whole
+#      stage is opt-in (SCOUT_PARAMS=1) and arjun is bounded by
+#      SCOUT_PARAMS_LIMIT hosts.
+#
+# Output: params/param_urls.txt (the corpus, exported as PARAM_URLS for the
+# scan stages) and params/arjun_params.txt (the hidden params, for the report).
+PARAM_DISCOVERY(){
+  local PDIR="$OUTPUT_DIR/params"; mkdir -p "$PDIR"
+  local CORPUS="$PDIR/param_urls.txt"; : > "$CORPUS"
+  local ARJUN_OUT="$PDIR/arjun_params.txt"; : > "$ARJUN_OUT"
+  export PARAM_URLS="$CORPUS"
+
+  local QSR; QSR="$(TOOL_PATH qsreplace || true)"
+  local _PD_START; NOW _PD_START
+
+  # --- 1. archived parameters ---
+  local ARCHIVED="$OUTPUT_DIR/urls/all_urls.out"
+  if [[ -s "$ARCHIVED" ]]; then
+    if [[ -n "$QSR" ]]; then
+      # qsreplace normalizes values and dedupes by endpoint+param set.
+      grep -E '\?[^[:space:]]*=' "$ARCHIVED" 2>/dev/null | "$QSR" FUZZ 2>/dev/null | sort -u >> "$CORPUS" || true
+    else
+      grep -E '\?[^[:space:]]*=' "$ARCHIVED" 2>/dev/null | sort -u >> "$CORPUS" || true
+    fi
+    INFO "Archived parameterized URLs: $(COUNT_LINES "$CORPUS")"
+  else
+    WARN "No archived URLs (run URL collection first) — parameter corpus will rely on arjun only."
+  fi
+
+  # --- 2. hidden parameters (arjun) ---
+  local AB; AB="$(TOOL_PATH arjun || true)"
+  local LIVE="${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}"
+  if [[ -n "$AB" && -s "$LIVE" ]]; then
+    local LIMIT="${SCOUT_PARAMS_LIMIT:-20}" THREADS="${SCOUT_ARJUN_THREADS:-10}"
+    local UA="${SCOUT_UA:-scout-recon}"
+    local n=0 url tmp="$PDIR/.arjun.$$"
+    START_SPINNER "arjun hidden-parameter discovery (cap ${LIMIT} hosts)"
+    while read -r url; do
+      [[ -n "$url" ]] || continue
+      (( n >= LIMIT )) && break
+      n=$((n + 1))
+      case "$url" in http*://*) ;; *) url="https://$url";; esac
+      : > "$tmp"
+      # -oT text output; -q quiet. arjun's exact text shape varies by version,
+      # so we harvest resiliently below rather than trust one format.
+      "$AB" -u "$url" -oT "$tmp" -t "$THREADS" -m GET --headers "User-Agent: $UA" \
+        > /dev/null 2>&1 || true
+      [[ -s "$tmp" ]] || continue
+      # Any full URLs arjun emitted are ready-made parameterized URLs.
+      grep -Eo 'https?://[^[:space:]]+=[^[:space:]]*' "$tmp" 2>/dev/null | sort -u >> "$CORPUS" || true
+      # Record the bare parameter names it found, for the report.
+      grep -Eo '[?&][a-zA-Z0-9_.-]+=' "$tmp" 2>/dev/null | tr -d '?&=' | sort -u >> "$ARJUN_OUT" || true
+    done < "$LIVE"
+    rm -f "$tmp"
+    STOP_SPINNER
+    sort -u "$ARJUN_OUT" -o "$ARJUN_OUT" 2>/dev/null || true
+    OK "arjun probed ${n} host(s); hidden params recorded: $(COUNT_LINES "$ARJUN_OUT")"
+  elif [[ -z "$AB" ]]; then
+    INFO "arjun not installed — skipping hidden-parameter discovery (run 'scout install --update')."
+  fi
+
+  sort -u "$CORPUS" -o "$CORPUS" 2>/dev/null || true
+  local TOTAL; TOTAL=$(COUNT_LINES "$CORPUS")
+  local _PD_END; NOW _PD_END
+  OK "Parameter corpus: $TOTAL URL(s) -> $CORPUS"
+  REC_TOOL "arjun + qsreplace (params)" "$(( _PD_END - _PD_START ))" "$TOTAL" \
+    "archived '?a=' via qsreplace + arjun -u <live host> (cap ${SCOUT_PARAMS_LIMIT:-20})"
+  return 0
+}

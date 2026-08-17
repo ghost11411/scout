@@ -23,7 +23,10 @@ SERVICE_DETECT(){
     return
   fi
 
+  local _SV_START; NOW _SV_START
   INFO "Running nmap -sV -T4 against $HOST ports: $ports"
   "$(command -v nmap || echo "$BIN_DIR/nmap")" -Pn -sV -T4 -p "$ports" -oN "$NMAP_OUT" "$HOST" || true
   OK "Nmap services saved -> $NMAP_OUT"
+  local _SV_END; NOW _SV_END
+  REC_TOOL "nmap (service)" "$(( _SV_END - _SV_START ))" "0" "nmap -Pn -sV -T4 -p $ports $HOST"
 }

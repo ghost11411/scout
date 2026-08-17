@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- GITHUB DORKING (gitdorks_go) ----------------
+# Searches public GitHub for the target's name against a list of leak-prone
+# dork patterns (API keys, credentials, internal hostnames, .env/config files).
+# This is OSINT against GitHub, NOT the target — it never touches the program's
+# hosts — but it needs a free GitHub token and can be rate-limited, so it is
+# opt-in via SCOUT_GITHUB_DORK=1 and requires GITHUB_TOKEN.
+#
+# Seeds are the apexes already in scope (wildcards_base + domains_all). Output:
+# github/gitdorks.txt (one line per hit: dork + repo URL) for manual review —
+# a hit is a lead, not a confirmed leak.
+GITHUB_DORK(){
+  local GDIR="$OUTPUT_DIR/github"; mkdir -p "$GDIR"
+  local OUT="$GDIR/gitdorks.txt"; : > "$OUT"
+
+  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    WARN "GITHUB_DORK: no GITHUB_TOKEN set — skipping (create a free classic token, any scope)."
+    return 0
+  fi
+  local GB; GB="$(TOOL_PATH gitdorks_go || true)"
+  if [[ -z "$GB" ]]; then
+    WARN "gitdorks_go not installed — skipping GitHub dorking (run 'scout install --update')."
+    return 0
+  fi
+  local DORKS="${SCOUT_GITDORKS_FILE:-$WORDLISTS_DIR/gitdorks.txt}"
+  if [[ ! -s "$DORKS" ]]; then
+    WARN "GitHub dorks list missing ($DORKS) — refresh with 'configure --force'. Skipping."
+    return 0
+  fi
+
+  # Seeds: the in-scope apexes. Read both lists if present.
+  local SEEDS=() f d
+  for f in "${INPUT_DOMAIN_ALL_FILE:-}" "${INPUT_WILDCARD_BASE_FILE:-}"; do
+    [[ -s "$f" ]] || continue
+    mapfile -t -O "${#SEEDS[@]}" SEEDS < "$f"
+  done
+  if (( ${#SEEDS[@]} == 0 )); then
+    WARN "GITHUB_DORK: no seed domains."
+    return 0
+  fi
+
+  # gitdorks_go wants a token FILE, not an env var.
+  local TF="$GDIR/.ghtoken.$$"
+  printf '%s\n' "$GITHUB_TOKEN" > "$TF"; chmod 600 "$TF" 2>/dev/null || true
+
+  local NWS="${SCOUT_GITDORKS_THREADS:-10}"
+  START_SPINNER "gitdorks_go over ${#SEEDS[@]} seed domain(s)"
+  for d in "${SEEDS[@]}"; do
+    [[ -n "$d" ]] || continue
+    "$GB" -gd "$DORKS" -target "$d" -tf "$TF" -nws "$NWS" 2>/dev/null >> "$OUT" || true
+  done
+  STOP_SPINNER
+  rm -f "$TF"
+
+  sort -u "$OUT" -o "$OUT" 2>/dev/null || true
+  local N; N=$(COUNT_LINES "$OUT")
+  if (( N > 0 )); then
+    OK "GitHub dork hits: $N -> $OUT (review each — leads, not confirmed leaks)"
+  else
+    INFO "GitHub dorking: no hits."
+  fi
+  REC_TOOL "gitdorks_go" "${ELAPSED:-0}" "$N" "gitdorks_go -gd gitdorks.txt -target <seed> -tf <token>"
+  return 0
+}

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- JS ANALYSIS (jsluice) ----------------
+# cmd/collect_js gathers JS *URLs*; this stage fetches the files and mines them
+# for endpoints and secrets with jsluice (BishopFox). This is where the real
+# attack surface hides — API paths, internal hostnames, and the occasional
+# hardcoded key — which is why every recon methodology (TBHM included) treats JS
+# analysis as a first-class step, not an afterthought.
+#
+# SAFETY: fetching public JS is a plain GET, but it still touches the target, so
+# it is bounded (SCOUT_JS_ANALYZE_LIMIT files), paced (SCOUT_JS_ANALYZE_DELAY),
+# and sends the identifying SCOUT_UA. On by default; SCOUT_JS_ANALYZE=0 to skip.
+ANALYZE_JS(){
+  local JS_URLS="${ANALYZE_JS_INPUT:-$OUTPUT_DIR/js/all_js_files.out}"
+  local JDIR="$OUTPUT_DIR/js"
+  if [[ ! -s "$JS_URLS" ]]; then
+    WARN "No JS URLs to analyze (run JS collection first)."
+    return 0
+  fi
+  local JB; JB="$(TOOL_PATH jsluice || true)"
+  if [[ -z "$JB" ]]; then
+    WARN "jsluice not installed — skipping JS analysis (run 'scout install --update')."
+    return 0
+  fi
+
+  local LIMIT="${SCOUT_JS_ANALYZE_LIMIT:-300}"
+  local DELAY="${SCOUT_JS_ANALYZE_DELAY:-0.1}"
+  local UA="${SCOUT_UA:-scout-recon}"
+  local RAWU="$JDIR/js_urls.jsonl" SECRETS="$JDIR/js_secrets.jsonl" ENDPOINTS="$JDIR/js_endpoints.txt"
+  : > "$RAWU"; : > "$SECRETS"; : > "$ENDPOINTS"
+
+  local n=0 url body tmp="$JDIR/.jsbody.$$"
+  START_SPINNER "Analyzing JS with jsluice (cap ${LIMIT} files)"
+  while read -r url; do
+    [[ -n "$url" ]] || continue
+    (( n >= LIMIT )) && break
+    n=$((n + 1))
+    # -sL follow redirects, bounded time, identifying UA. Failures are skipped.
+    body=$(curl -sL --max-time 15 -A "$UA" "$url" 2>/dev/null) || true
+    [[ -n "$body" ]] || continue
+    printf '%s' "$body" > "$tmp"
+    # jsluice takes a file path; both subcommands emit JSON lines.
+    "$JB" urls    "$tmp" 2>/dev/null >> "$RAWU"    || true
+    "$JB" secrets "$tmp" 2>/dev/null >> "$SECRETS" || true
+    _SLEEP "$DELAY"
+  done < "$JS_URLS"
+  rm -f "$tmp"
+  STOP_SPINNER
+
+  # Flatten the discovered endpoints into one greppable list.
+  if [[ -s "$RAWU" ]] && HAVE_TOOL jq; then
+    jq -r '.url // empty' "$RAWU" 2>/dev/null | sort -u > "$ENDPOINTS" || true
+  fi
+  OK "JS analysis: $(COUNT_LINES "$ENDPOINTS") endpoint(s), $(COUNT_LINES "$SECRETS") secret record(s) from ${n} file(s)"
+  INFO "  endpoints -> $ENDPOINTS   secrets -> $SECRETS"
+  REC_TOOL "jsluice" "${ELAPSED:-0}" "$(COUNT_LINES "$ENDPOINTS")" \
+    "jsluice urls|secrets <fetched JS> (cap ${LIMIT}, UA=\$SCOUT_UA)"
+  return 0
+}

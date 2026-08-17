@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- XSS SCANNING (Gxss + dalfox) ----------------
+# Cross-site scripting (OWASP A03: Injection). Candidate URLs come from the
+# gf `xss` bucket (cmd/analyze_urls) plus the parameter corpus
+# (cmd/param_discovery). Optional Gxss pre-filter keeps only URLs whose
+# parameters actually reflect, so dalfox — the heavier, confirming scanner —
+# only spends requests on live reflection points.
+#
+# ACTIVE: dalfox sends crafted payloads, so opt-in via SCOUT_XSS=1. It is
+# rate-paced (SCOUT_XSS_DELAY), bounded (SCOUT_XSS_LIMIT candidate URLs), sends
+# SCOUT_UA, and skips the noisy BAV/mining phases. dalfox itself only tests for
+# XSS (it does not carry destructive payloads), so it stays inside safe mode.
+SCAN_XSS(){
+  local VDIR="$OUTPUT_DIR/vulns"; mkdir -p "$VDIR"
+  local OUT="$VDIR/xss.txt"; : > "$OUT"
+
+  local DB; DB="$(TOOL_PATH dalfox || true)"
+  if [[ -z "$DB" ]]; then
+    WARN "dalfox not installed — skipping XSS scan (run 'scout install --update')."
+    return 0
+  fi
+
+  # Assemble candidates: gf xss bucket + parameter corpus, only URLs with params.
+  local CANDS="$VDIR/.xss_cands.$$"
+  {
+    [[ -s "$OUTPUT_DIR/urls/gf/xss.txt" ]] && cat "$OUTPUT_DIR/urls/gf/xss.txt"
+    [[ -s "${PARAM_URLS:-$OUTPUT_DIR/params/param_urls.txt}" ]] && cat "${PARAM_URLS:-$OUTPUT_DIR/params/param_urls.txt}"
+  } 2>/dev/null | grep -E '\?[^[:space:]]*=' 2>/dev/null | sort -u > "$CANDS" || true
+
+  if [[ ! -s "$CANDS" ]]; then
+    WARN "No parameterized URLs to test for XSS (need gf xss bucket or parameter corpus)."
+    rm -f "$CANDS"; return 0
+  fi
+
+  local LIMIT="${SCOUT_XSS_LIMIT:-200}" DELAY="${SCOUT_XSS_DELAY:-100}" WORKERS="${SCOUT_XSS_WORKERS:-20}"
+  local UA="${SCOUT_UA:-scout-recon}"
+
+  # Optional Gxss reflection pre-filter.
+  local GX; GX="$(TOOL_PATH Gxss || true)"
+  local FEED="$CANDS"
+  if [[ -n "$GX" ]]; then
+    local REFL="$VDIR/.xss_reflected.$$"
+    "$GX" -c 30 < "$CANDS" 2>/dev/null | sed 's/=.*/=/' | sort -u > "$REFL" || true
+    if [[ -s "$REFL" ]]; then
+      FEED="$REFL"
+      INFO "Gxss: $(COUNT_LINES "$REFL") reflecting parameter(s) to test."
+    fi
+  fi
+
+  START_SPINNER "dalfox XSS scan over $(head -n "$LIMIT" "$FEED" | wc -l | tr -d ' ') candidate(s)"
+  # dalfox pipe reads URLs on stdin. --skip-bav / --skip-mining-all cut the noisy
+  # phases; --delay paces it; -w bounds concurrency.
+  head -n "$LIMIT" "$FEED" | "$DB" pipe \
+    --skip-bav --skip-mining-all --delay "$DELAY" -w "$WORKERS" \
+    --user-agent "$UA" --no-color --silence --format plain -o "$OUT" \
+    > /dev/null 2>&1 || true
+  STOP_SPINNER
+  rm -f "$CANDS" "$VDIR/.xss_reflected.$$" 2>/dev/null || true
+
+  local HITS; HITS=$(COUNT_LINES "$OUT")
+  if (( HITS > 0 )); then
+    OK "XSS: $HITS potential finding(s) -> $OUT"
+  else
+    INFO "XSS: no reflected/confirmed findings."
+  fi
+  REC_TOOL "dalfox (xss)" "${ELAPSED:-0}" "$HITS" \
+    "gf xss + param corpus | Gxss | dalfox pipe --skip-bav --skip-mining-all"
+  return 0
+}

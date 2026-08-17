@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- SCREENSHOTS (gowitness) ----------------
+# Visual triage of the live hosts — the single fastest way to spot login panels,
+# default pages, dev/staging apps and takeover candidates across hundreds of
+# hosts, and a staple of TBHM's recon. Needs a headless Chromium (installed
+# alongside gowitness). Opt-in via SCOUT_SCREENSHOTS=1 because it is heavy.
+SCREENSHOT(){
+  local IN="${SHOT_INPUT:-${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}}"
+  if [[ ! -s "$IN" ]]; then
+    WARN "No live hosts to screenshot."
+    return 0
+  fi
+  local GB; GB="$(TOOL_PATH gowitness || true)"
+  if [[ -z "$GB" ]]; then
+    WARN "gowitness not installed — skipping screenshots (run 'scout install --update')."
+    return 0
+  fi
+  local SDIR="$OUTPUT_DIR/screenshots"; mkdir -p "$SDIR"
+
+  START_SPINNER "Screenshotting live hosts with gowitness"
+  # gowitness's CLI changed between major versions: v3 is `scan file -f`, v2 is
+  # `file -f`. Try v3, fall back to v2; both are best-effort (|| true).
+  if ! "$GB" scan file -f "$IN" --screenshot-path "$SDIR" > /dev/null 2>&1; then
+    "$GB" file -f "$IN" -P "$SDIR" > /dev/null 2>&1 || true
+  fi
+  STOP_SPINNER
+
+  local SHOTS; SHOTS=$(find "$SDIR" -type f -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+  OK "Screenshots: ${SHOTS:-0} -> $SDIR"
+  REC_TOOL "gowitness" "${ELAPSED:-0}" "${SHOTS:-0}" "gowitness scan file -f live_hosts.txt"
+  return 0
+}

@@ -16,12 +16,25 @@ PORT_SCAN_PER_HOST(){
   NAABU_OUT="$PORTS_DIR/${HOST_SAFE}_naabu.out"
   MASS_OUT="$PORTS_DIR/${HOST_SAFE}_masscan.out"
 
-  INFO "Running naabu for $HOST"
-  "$(command -v naabu || echo "$BIN_DIR/naabu")" -host "$HOST" -ports 1-65535 -rate "$NAABU_RATE" -silent -o "$NAABU_OUT" || true
+  # Default to the top 1000 ports, not the full 65535: over a whole live-host
+  # list a full sweep is impractically slow. NAABU_PORTS="1-65535" (or any naabu
+  # -p spec) forces an explicit range when a deep scan is actually wanted.
+  local NAABU_PORT_ARG=(-top-ports "${NAABU_TOP_PORTS:-1000}")
+  [[ -n "${NAABU_PORTS:-}" ]] && NAABU_PORT_ARG=(-p "$NAABU_PORTS")
+
+  # naabu (SYN) and masscan need raw-socket privileges. Scout runs unprivileged,
+  # so escalate just these commands with sudo when we are not already root
+  # (prompts for a password the first time; sudo caches it for later hosts).
+  local SUDO; SUDO="$(MAYBE_SUDO)"
+  local NAABU_BIN; NAABU_BIN="$(command -v naabu || echo "$BIN_DIR/naabu")"
+
+  local _PS_START; NOW _PS_START
+  INFO "Running naabu for $HOST${SUDO:+ (via sudo — raw sockets)}"
+  $SUDO "$NAABU_BIN" -host "$HOST" "${NAABU_PORT_ARG[@]}" -rate "$NAABU_RATE" -silent -o "$NAABU_OUT" || true
 
   if command -v masscan >/dev/null 2>&1; then
-    INFO "Running masscan for $HOST"
-    masscan "$HOST" -p1-65535 --rate "$MASSCAN_RATE" -oG "$MASS_OUT" || true
+    INFO "Running masscan for $HOST${SUDO:+ (via sudo — raw sockets)}"
+    $SUDO masscan "$HOST" -p1-65535 --rate "$MASSCAN_RATE" -oG "$MASS_OUT" || true
   else
     INFO "masscan not installed, skipping masscan for $HOST"
   fi
@@ -42,4 +55,39 @@ PORT_SCAN_PER_HOST(){
   awk '$0 ~ /^[0-9]+$/ && $0+0 >= 1 && $0+0 <= 65535 { print $0+0 }' "$AGG" |
     sort -nu > "$PORTS_DIR/${HOST_SAFE}_ports"
   OK "Ports for $HOST -> $PORTS_DIR/${HOST_SAFE}_ports"
+  local _PS_END; NOW _PS_END
+  REC_TOOL "naabu" "$(( _PS_END - _PS_START ))" "$(COUNT_LINES "$PORTS_DIR/${HOST_SAFE}_ports")" \
+    "naabu -host $HOST -top-ports ${NAABU_TOP_PORTS:-1000} -rate $NAABU_RATE"
+}
+
+# Whole-stage wrapper: PORT_SCAN_PER_HOST is per-host, so scout needs a driver
+# that loops the resolved-host list. Named PORT_SCAN so SOURCE_CMD's fallback
+# stub (${file^^}) matches the function scout actually calls. Optionally chains
+# nmap service detection (SERVICE_DETECT, from cmd/service_scan) when that stage
+# is also sourced and SCOUT_SERVICE_SCAN=1.
+#
+# ACTIVE + needs raw-socket privileges (naabu/pcap). Scout runs unprivileged, so
+# PORT_SCAN_PER_HOST escalates just the naabu/masscan commands with sudo (see
+# MAYBE_SUDO). Gated by SCOUT_PORTSCAN at the call site in scout.
+PORT_SCAN(){
+  local IN="${PORTSCAN_INPUT:-$OUTPUT_DIR/final_subdomains.out}"
+  if [[ ! -s "$IN" ]]; then
+    WARN "No hosts to port scan."
+    return 0
+  fi
+  if ! HAVE_TOOL naabu; then
+    WARN "naabu not installed — skipping port scan (run 'scout install --update')."
+    return 0
+  fi
+  local do_svc=0
+  [[ "${SCOUT_SERVICE_SCAN:-0}" == "1" ]] && declare -F SERVICE_DETECT >/dev/null && do_svc=1
+
+  local HOST
+  while read -r HOST; do
+    HOST="${HOST//[[:space:]]/}"
+    [[ -z "$HOST" ]] && continue
+    PORT_SCAN_PER_HOST "$HOST"
+    (( do_svc )) && SERVICE_DETECT "$HOST"
+  done < "$IN"
+  return 0
 }

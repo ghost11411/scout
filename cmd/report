@@ -1,0 +1,421 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- RUN REPORT (SUMMARY.md + report.html) ----------------
+# End-of-run rollup. Two artifacts, both pure aggregation of files already on
+# disk (nothing here touches the network):
+#   SUMMARY.md   — a quick, greppable count of every artifact + where it lives.
+#   report.html  — a full, self-contained HTML report: run metadata, total and
+#                  per-tool / per-phase timings, the bug-bounty phases with the
+#                  tools and commands run at each, and the nuclei severity
+#                  breakdown (critical/high/medium/low/info) with a findings
+#                  table. Self-contained (inlined CSS, no external requests) so
+#                  it opens anywhere and can be attached to a report.
+#
+# Timings and commands come from the telemetry TSVs that every stage appends to
+# via REC_TOOL / PHASE_BEGIN / PHASE_END (see cmd/lib).
+
+# HTML-escape stdin -> stdout (&, <, >, ").
+_HTML_ESC(){ sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
+# HTML-escape a single argument.
+_ESC(){ printf '%s' "${1:-}" | _HTML_ESC; }
+
+REPORT(){
+  local R="$OUTPUT_DIR/SUMMARY.md"
+  local O="$OUTPUT_DIR"
+
+  # _row <label> <file> — a markdown table line with a count, only if the file
+  # exists. `|| return 0` (not `&& printf`): a bare _row whose file is absent
+  # would otherwise return 1 and, under set -e, abort the run.
+  _row(){ [[ -s "$2" ]] || return 0; printf '| %s | %s | `%s` |\n' "$1" "$(COUNT_LINES "$2")" "${2#"$O"/}"; }
+
+  {
+    printf '# Scout run summary\n\n'
+    printf -- '- **Output:** `%s`\n' "$O"
+    printf -- '- **Generated:** %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo now)"
+    printf -- '- **Total time:** %s\n' "$(HUMAN_TIME "${SCOUT_TOTAL_SECONDS:-0}")"
+    printf -- '- **Safe mode:** %s   **User-Agent:** `%s`\n\n' \
+      "$([[ "${SCOUT_SAFE:-1}" == "1" ]] && echo on || echo OFF)" "${SCOUT_UA:-unset}"
+
+    printf '## Assets\n\n| Stage | Count | File |\n|---|---:|---|\n'
+    _row "Combined subdomains"   "$O/subdomains/combined_subdomains.txt"
+    _row "Resolved (final)"      "$O/final_subdomains.out"
+    _row "Live web hosts"        "$O/http/live_hosts.txt"
+    _row "URLs collected"        "$O/urls/all_urls.out"
+    _row "JS files"              "$O/js/all_js_files.out"
+    _row "JS endpoints"          "$O/js/js_endpoints.txt"
+    _row "Parameter keys"        "$O/urls/param_keys.txt"
+    printf '\n'
+
+    if compgen -G "$O/urls/gf/*.txt" > /dev/null 2>&1; then
+      printf '## URL vuln-candidate buckets (gf)\n\n| Class | URLs | File |\n|---|---:|---|\n'
+      local f
+      for f in "$O"/urls/gf/*.txt; do
+        printf '| %s | %s | `%s` |\n' "$(basename "$f" .txt)" "$(COUNT_LINES "$f")" "${f#"$O"/}"
+      done
+      printf '\n'
+    fi
+
+    printf '## Findings & active stages\n\n| Item | Count | File |\n|---|---:|---|\n'
+    _row "JS secrets (records)"  "$O/js/js_secrets.jsonl"
+    _row "nuclei findings"       "$O/nuclei/nuclei.jsonl"
+    _row "OWASP nuclei findings" "$O/vulns/owasp_nuclei.jsonl"
+    _row "XSS (dalfox)"          "$O/vulns/xss.txt"
+    _row "LFI confirmed"         "$O/vulns/lfi.txt"
+    _row "SQLi (error-based)"    "$O/vulns/sqli.txt"
+    _row "Open redirect"         "$O/vulns/open_redirect.txt"
+    _row "SSRF candidates"       "$O/vulns/ssrf_candidates.txt"
+    _row "RFI candidates"        "$O/vulns/rfi_candidates.txt"
+    _row "Parameter corpus"      "$O/params/param_urls.txt"
+    _row "Favicon hashes"        "$O/favicon/favicon_hashes.txt"
+    _row "GitHub dork hits"      "$O/github/gitdorks.txt"
+    _row "Subdomain takeovers"   "$O/takeover/takeovers.txt"
+    _row "Takeover (nuclei)"     "$O/takeover/nuclei_takeover.jsonl"
+    if compgen -G "$O/ports/*_ports" > /dev/null 2>&1; then
+      printf '| Hosts with open ports | %s | `ports/` |\n' \
+        "$(find "$O/ports" -name '*_ports' -size +0c 2>/dev/null | wc -l | tr -d ' ')"
+    fi
+    [[ -d "$O/content" ]]     && printf '| Content-discovery outputs | %s | `content/` |\n' "$(find "$O/content" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    [[ -d "$O/screenshots" ]] && printf '| Screenshots | %s | `screenshots/` |\n' "$(find "$O/screenshots" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+    printf '\n'
+
+    if [[ -s "$O/scope_expansion/asn_cidrs.txt" || -s "$O/scope_expansion/related_domains.txt" ]]; then
+      printf '## Scope-expansion leads (REVIEW ONLY — not scanned)\n\n| Lead | Count | File |\n|---|---:|---|\n'
+      _row "ASN / CIDR ranges"    "$O/scope_expansion/asn_cidrs.txt"
+      _row "Related root domains" "$O/scope_expansion/related_domains.txt"
+      printf '\nConfirm each is in your program scope before testing it.\n\n'
+    fi
+
+    printf -- '---\n_Full HTML report: `report.html`. Stay in scope. Respect the program rules and rate limits._\n'
+  } > "$R"
+
+  OK "Run summary -> $R"
+
+  _GEN_HTML || WARN "HTML report generation hit an error; SUMMARY.md is still available."
+  return 0
+}
+
+# ---------------- HTML REPORT ----------------
+# Severity counts are set as globals by _SEVERITY_COUNTS so the header cards and
+# the findings table share one parse.
+_SEV_CRIT=0; _SEV_HIGH=0; _SEV_MED=0; _SEV_LOW=0; _SEV_INFO=0; _SEV_UNKNOWN=0; _SEV_TOTAL=0
+
+# Accepts one or more nuclei-style jsonl files (nuclei.jsonl, owasp_nuclei.jsonl,
+# nuclei_takeover.jsonl) and sums their severities together.
+_SEVERITY_COUNTS(){
+  _SEV_CRIT=0; _SEV_HIGH=0; _SEV_MED=0; _SEV_LOW=0; _SEV_INFO=0; _SEV_UNKNOWN=0; _SEV_TOTAL=0
+  local files=() JL
+  for JL in "$@"; do [[ -s "$JL" ]] && files+=("$JL"); done
+  (( ${#files[@]} > 0 )) || return 0
+  local sev counts
+  if HAVE_TOOL jq; then
+    counts=$(jq -r '.info.severity // "unknown"' "${files[@]}" 2>/dev/null || true)
+  else
+    # Fallback: pull "severity":"x" from each JSON line.
+    counts=$(grep -hoE '"severity"[[:space:]]*:[[:space:]]*"[^"]*"' "${files[@]}" 2>/dev/null | sed -E 's/.*"([^"]*)"$/\1/' || true)
+  fi
+  while IFS= read -r sev; do
+    [[ -n "$sev" ]] || continue
+    _SEV_TOTAL=$((_SEV_TOTAL + 1))
+    case "$sev" in
+      critical) _SEV_CRIT=$((_SEV_CRIT + 1));;
+      high)     _SEV_HIGH=$((_SEV_HIGH + 1));;
+      medium)   _SEV_MED=$((_SEV_MED + 1));;
+      low)      _SEV_LOW=$((_SEV_LOW + 1));;
+      info|informational) _SEV_INFO=$((_SEV_INFO + 1));;
+      *)        _SEV_UNKNOWN=$((_SEV_UNKNOWN + 1));;
+    esac
+  done <<< "$counts"
+  return 0
+}
+
+# Emit the nuclei findings as <tr> rows, most-severe first. Accepts one or more
+# jsonl files. Escapes every field.
+_FINDINGS_ROWS(){
+  local files=() JL total=0
+  for JL in "$@"; do [[ -s "$JL" ]] && { files+=("$JL"); total=$((total + $(COUNT_LINES "$JL"))); }; done
+  (( ${#files[@]} > 0 )) || return 0
+  HAVE_TOOL jq || { printf '<tr><td colspan="3">Install jq to render per-finding detail; %s raw findings recorded.</td></tr>\n' "$total"; return 0; }
+  # rank\tseverity\tname\tlocation, sorted by rank then severity.
+  jq -r '
+    (.info.severity // "unknown") as $s
+    | ({critical:0,high:1,medium:2,low:3,info:4,unknown:5}[$s] // 6) as $r
+    | [$r, $s, (.info.name // ."template-id" // "unknown"),
+       (."matched-at" // .host // .url // "")] | @tsv' "${files[@]}" 2>/dev/null |
+    sort -t$'\t' -k1,1n -k3,3 |
+    while IFS=$'\t' read -r rank sev name loc; do
+      printf '<tr><td><span class="sev sev-%s">%s</span></td><td>%s</td><td class="mono">%s</td></tr>\n' \
+        "$(_ESC "$sev")" "$(_ESC "$sev")" "$(_ESC "$name")" "$(_ESC "$loc")"
+    done
+  return 0
+}
+
+# _COUNT_FILE <file> -> count or 0 (thin wrapper so the asset builder stays terse).
+_ASSET_ROW(){ # <label> <file>
+  [[ -s "$2" ]] || return 0
+  printf '<tr><td>%s</td><td class="num">%s</td><td class="mono">%s</td></tr>\n' \
+    "$(_ESC "$1")" "$(COUNT_LINES "$2")" "$(_ESC "${2#"$OUTPUT_DIR"/}")"
+}
+
+_GEN_HTML(){
+  local O="$OUTPUT_DIR"
+  local HTML="$O/report.html"
+  local TOOLS_TSV="$O/.telemetry/tools.tsv"
+  local PHASES_TSV="$O/.telemetry/phases.tsv"
+  # Every nuclei-style jsonl the pipeline can produce: the base scan, the OWASP
+  # DAST sweep, and the takeover fallback. Severity cards + findings table span
+  # all of them.
+  local NUCLEI_FILES=("$O/nuclei/nuclei.jsonl" "$O/vulns/owasp_nuclei.jsonl" "$O/takeover/nuclei_takeover.jsonl")
+  local HAVE_NUCLEI=0 nf
+  for nf in "${NUCLEI_FILES[@]}"; do [[ -s "$nf" ]] && HAVE_NUCLEI=1; done
+  local gen; gen="$(date -u '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo now)"
+  local total; total="$(HUMAN_TIME "${SCOUT_TOTAL_SECONDS:-0}")"
+
+  _SEVERITY_COUNTS "${NUCLEI_FILES[@]}"
+
+  # Target summary line.
+  local targets=""
+  [[ -s "$INPUT_WILDCARD_ALL_FILE" ]] && targets+="$(paste -sd', ' "$INPUT_WILDCARD_ALL_FILE" 2>/dev/null) "
+  [[ -s "$INPUT_DOMAIN_ALL_FILE" ]]   && targets+="$(paste -sd', ' "$INPUT_DOMAIN_ALL_FILE" 2>/dev/null)"
+  [[ -n "${targets// /}" ]] || targets="(none)"
+
+  {
+    cat <<'HTML_HEAD'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scout Recon Report</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --border:#e3e6ea; --text:#1b1f24; --muted:#5b6470;
+  --accent:#0a7d4f; --accent-2:#0b6bcb; --mono-bg:#f0f2f4; --row:#fafbfc;
+  --crit:#8b1a1a; --high:#c0392b; --med:#d98a00; --low:#2d7d46; --info:#5b6470;
+}
+:root:not([data-theme="light"]){}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1216; --panel:#171b21; --border:#272d35; --text:#e6e9ee; --muted:#9aa4b2;
+    --accent:#3ddc97; --accent-2:#5aa9ff; --mono-bg:#11151a; --row:#1b2027;
+    --crit:#ff6b6b; --high:#ff8787; --med:#ffc65c; --low:#79d29a; --info:#9aa4b2;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1216; --panel:#171b21; --border:#272d35; --text:#e6e9ee; --muted:#9aa4b2;
+  --accent:#3ddc97; --accent-2:#5aa9ff; --mono-bg:#11151a; --row:#1b2027;
+  --crit:#ff6b6b; --high:#ff8787; --med:#ffc65c; --low:#79d29a; --info:#9aa4b2;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 20px 64px;}
+header.hero{background:linear-gradient(120deg,var(--accent),var(--accent-2));
+  color:#fff;border-radius:14px;padding:26px 28px;margin-bottom:22px;}
+header.hero h1{margin:0 0 6px;font-size:26px;letter-spacing:.3px;}
+header.hero .sub{opacity:.92;font-size:14px;}
+.meta{display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:16px;font-size:13.5px;}
+.meta div span{opacity:.85;}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;margin:18px 0;}
+h2{font-size:18px;margin:6px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+h3{font-size:14px;color:var(--muted);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.6px;}
+table{width:100%;border-collapse:collapse;font-size:13.5px;}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;}
+th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+tr:nth-child(even) td{background:var(--row);}
+td.num,td.time{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+td.mono{font-size:12.5px;color:var(--muted);word-break:break-all;}
+.tablewrap{overflow-x:auto;}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;}
+.card{border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center;background:var(--row);}
+.card .n{font-size:26px;font-weight:700;line-height:1;}
+.card .l{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-top:6px;}
+.card.crit .n{color:var(--crit)} .card.high .n{color:var(--high)}
+.card.med .n{color:var(--med)} .card.low .n{color:var(--low)} .card.info .n{color:var(--info)}
+.sev{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.4px;color:#fff;}
+.sev-critical{background:var(--crit)} .sev-high{background:var(--high)}
+.sev-medium{background:var(--med);color:#231a00} .sev-low{background:var(--low)}
+.sev-info,.sev-informational,.sev-unknown{background:var(--info)}
+.phase-tag{display:inline-block;background:var(--mono-bg);border:1px solid var(--border);
+  border-radius:6px;padding:1px 8px;font-size:12px;color:var(--accent-2);}
+.empty{color:var(--muted);font-style:italic;padding:8px 0;}
+footer{color:var(--muted);font-size:12.5px;margin-top:26px;text-align:center;}
+.legend{font-size:12.5px;color:var(--muted);margin-top:8px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+HTML_HEAD
+
+    # ---- Hero / metadata ----
+    printf '<header class="hero"><h1>Scout Recon Report</h1>'
+    printf '<div class="sub">Target: <strong>%s</strong></div>' "$(_ESC "$targets")"
+    printf '<div class="meta">'
+    printf '<div><span>Generated</span><br><strong>%s</strong></div>' "$(_ESC "$gen")"
+    printf '<div><span>Total runtime</span><br><strong>%s</strong></div>' "$(_ESC "$total")"
+    printf '<div><span>Safe mode</span><br><strong>%s</strong></div>' "$([[ "${SCOUT_SAFE:-1}" == "1" ]] && echo ON || echo OFF)"
+    printf '<div><span>Findings</span><br><strong>%s</strong></div>' "$_SEV_TOTAL"
+    printf '<div><span>Output dir</span><br><strong class="mono">%s</strong></div>' "$(_ESC "$O")"
+    printf '</div></header>\n'
+
+    # ---- Severity cards ----
+    printf '<section class="panel"><h2>Vulnerability severity</h2>'
+    if (( HAVE_NUCLEI )); then
+      printf '<div class="cards">'
+      printf '<div class="card crit"><div class="n">%s</div><div class="l">Critical</div></div>' "$_SEV_CRIT"
+      printf '<div class="card high"><div class="n">%s</div><div class="l">High</div></div>' "$_SEV_HIGH"
+      printf '<div class="card med"><div class="n">%s</div><div class="l">Medium</div></div>' "$_SEV_MED"
+      printf '<div class="card low"><div class="n">%s</div><div class="l">Low</div></div>' "$_SEV_LOW"
+      printf '<div class="card info"><div class="n">%s</div><div class="l">Info</div></div>' "$_SEV_INFO"
+      printf '</div>'
+      printf '<h3>Findings (most severe first)</h3><div class="tablewrap"><table>'
+      printf '<tr><th>Severity</th><th>Name / template</th><th>Location</th></tr>'
+      _FINDINGS_ROWS "${NUCLEI_FILES[@]}"
+      printf '</table></div>'
+    else
+      printf '<p class="empty">No nuclei scan recorded (run with SCOUT_NUCLEI=1 or SCOUT_OWASP=1 to enable template-based vulnerability scanning).</p>'
+    fi
+    printf '</section>\n'
+
+    # ---- Active exploitation findings (tool-confirmed, per class) ----
+    # These come from the dedicated active stages (dalfox, qsreplace+httpx probes,
+    # subzy). Each row carries the severity level typical of that class so the
+    # report shows "severity found" for the non-nuclei findings too.
+    _ACTIVE_ROW(){ # <severity> <class> <file>
+      [[ -s "$3" ]] || return 0
+      local c; c=$(COUNT_LINES "$3")
+      (( c > 0 )) || return 0
+      printf '<tr><td><span class="sev sev-%s">%s</span></td><td>%s</td><td class="num">%s</td><td class="mono">%s</td></tr>\n' \
+        "$1" "$1" "$(_ESC "$2")" "$c" "$(_ESC "${3#"$O"/}")"
+    }
+    local _has_active=0
+    for _af in "$O/vulns/xss.txt" "$O/vulns/lfi.txt" "$O/vulns/sqli.txt" "$O/vulns/open_redirect.txt" \
+               "$O/vulns/ssrf_candidates.txt" "$O/vulns/rfi_candidates.txt" "$O/takeover/takeovers.txt"; do
+      [[ -s "$_af" ]] && _has_active=1
+    done
+    if (( _has_active )); then
+      printf '<section class="panel"><h2>Active exploitation findings</h2>'
+      printf '<div class="tablewrap"><table><tr><th>Severity</th><th>Class</th><th>Count</th><th>File</th></tr>'
+      _ACTIVE_ROW high     "Subdomain takeover (subzy)"    "$O/takeover/takeovers.txt"
+      _ACTIVE_ROW high     "Cross-site scripting (dalfox)" "$O/vulns/xss.txt"
+      _ACTIVE_ROW high     "Local file inclusion"          "$O/vulns/lfi.txt"
+      _ACTIVE_ROW critical "SQL injection (error-based)"   "$O/vulns/sqli.txt"
+      _ACTIVE_ROW medium   "Open redirect"                 "$O/vulns/open_redirect.txt"
+      _ACTIVE_ROW low      "SSRF candidates (review)"      "$O/vulns/ssrf_candidates.txt"
+      _ACTIVE_ROW low      "RFI candidates (review)"       "$O/vulns/rfi_candidates.txt"
+      printf '</table></div>'
+      printf '<p class="legend">Candidate rows are leads to verify by hand; confirmed rows were matched by the tool. Severity shown is the class-typical rating, not a per-instance CVSS.</p></section>\n'
+    fi
+
+    # ---- Phase timeline ----
+    printf '<section class="panel"><h2>Bug-bounty phases</h2>'
+    printf '<div class="tablewrap"><table><tr><th>#</th><th>Phase</th><th>Wall time</th><th>Tools</th><th>Items</th></tr>'
+    if [[ -s "$PHASES_TSV" ]]; then
+      # For each phase (in execution order), sum tool runs + items from tools.tsv.
+      awk -F'\t' -v OFS='\t' '
+        FNR==NR { # tools.tsv: phase,tool,secs,count,cmd
+          runs[$1]++; items[$1]+=$4; next
+        }
+        { # phases.tsv: phase,secs
+          n++; print n, $1, $2, (runs[$1]+0), (items[$1]+0)
+        }' "$TOOLS_TSV" "$PHASES_TSV" 2>/dev/null |
+      while IFS=$'\t' read -r idx phase secs pruns pitems; do
+        printf '<tr><td class="num">%s</td><td><span class="phase-tag">%s</span></td><td class="time">%s</td><td class="num">%s</td><td class="num">%s</td></tr>\n' \
+          "$idx" "$(_ESC "$phase")" "$(HUMAN_TIME "$secs")" "$pruns" "$pitems"
+      done
+    else
+      printf '<tr><td colspan="5" class="empty">No phase timing recorded.</td></tr>'
+    fi
+    printf '</table></div><p class="legend">Wall time is measured per phase; Items is the total produced by the tools in that phase.</p></section>\n'
+
+    # ---- Tools & commands, grouped by phase ----
+    printf '<section class="panel"><h2>Tools &amp; commands per phase</h2>'
+    if [[ -s "$TOOLS_TSV" ]]; then
+      printf '<div class="tablewrap"><table><tr><th>Phase</th><th>Tool</th><th>Runs</th><th>Time</th><th>Items</th><th>Command</th></tr>'
+      # Aggregate per (phase,tool): sum secs, sum count, count runs, first cmd;
+      # preserve first-seen order of phase then tool.
+      awk -F'\t' '
+        {
+          key=$1 SUBSEP $2
+          if (!(key in seen)) { seen[key]=1; order[++n]=key; cmd[key]=$5; ph[key]=$1; tl[key]=$2 }
+          secs[key]+=$3; items[key]+=$4; runs[key]++
+        }
+        END{
+          for (i=1;i<=n;i++){ k=order[i];
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n", ph[k], tl[k], runs[k], secs[k], items[k], cmd[k] }
+        }' "$TOOLS_TSV" 2>/dev/null |
+      while IFS=$'\t' read -r phase tool runs secs items cmd; do
+        printf '<tr><td><span class="phase-tag">%s</span></td><td>%s</td><td class="num">%s</td><td class="time">%s</td><td class="num">%s</td><td class="mono">%s</td></tr>\n' \
+          "$(_ESC "$phase")" "$(_ESC "$tool")" "$runs" "$(HUMAN_TIME "$secs")" "$items" "$(_ESC "$cmd")"
+      done
+      printf '</table></div>'
+    else
+      printf '<p class="empty">No per-tool telemetry recorded.</p>'
+    fi
+    printf '</section>\n'
+
+    # ---- Assets ----
+    printf '<section class="panel"><h2>Assets discovered</h2><div class="tablewrap"><table>'
+    printf '<tr><th>Stage</th><th>Count</th><th>File</th></tr>'
+    _ASSET_ROW "Combined subdomains" "$O/subdomains/combined_subdomains.txt"
+    _ASSET_ROW "Resolved (final)"    "$O/final_subdomains.out"
+    _ASSET_ROW "Live web hosts"      "$O/http/live_hosts.txt"
+    _ASSET_ROW "URLs collected"      "$O/urls/all_urls.out"
+    _ASSET_ROW "Parameter keys"      "$O/urls/param_keys.txt"
+    _ASSET_ROW "JS files"            "$O/js/all_js_files.out"
+    _ASSET_ROW "JS endpoints"        "$O/js/js_endpoints.txt"
+    _ASSET_ROW "JS secrets (records)" "$O/js/js_secrets.jsonl"
+    _ASSET_ROW "Parameterized URLs (corpus)" "$O/params/param_urls.txt"
+    _ASSET_ROW "Hidden params (arjun)" "$O/params/arjun_params.txt"
+    _ASSET_ROW "Favicon hashes" "$O/favicon/favicon_hashes.txt"
+    _ASSET_ROW "GitHub dork hits" "$O/github/gitdorks.txt"
+    _ASSET_ROW "Subdomain takeovers" "$O/takeover/takeovers.txt"
+    printf '</table></div>'
+
+    # gf buckets
+    if compgen -G "$O/urls/gf/*.txt" > /dev/null 2>&1; then
+      printf '<h3>URL vuln-candidate buckets (gf)</h3><div class="tablewrap"><table>'
+      printf '<tr><th>Class</th><th>URLs</th><th>File</th></tr>'
+      local f
+      for f in "$O"/urls/gf/*.txt; do
+        printf '<tr><td>%s</td><td class="num">%s</td><td class="mono">%s</td></tr>\n' \
+          "$(_ESC "$(basename "$f" .txt)")" "$(COUNT_LINES "$f")" "$(_ESC "${f#"$O"/}")"
+      done
+      printf '</table></div>'
+    fi
+
+    # active-stage artifacts
+    local have_active=0
+    { compgen -G "$O/ports/*_ports" >/dev/null 2>&1 || [[ -d "$O/content" || -d "$O/screenshots" ]]; } && have_active=1
+    if (( have_active )); then
+      printf '<h3>Active-stage outputs</h3><div class="tablewrap"><table><tr><th>Item</th><th>Count</th></tr>'
+      if compgen -G "$O/ports/*_ports" >/dev/null 2>&1; then
+        printf '<tr><td>Hosts with open ports</td><td class="num">%s</td></tr>' \
+          "$(find "$O/ports" -name '*_ports' -size +0c 2>/dev/null | wc -l | tr -d ' ')"
+      fi
+      [[ -d "$O/content" ]]     && printf '<tr><td>Content-discovery outputs</td><td class="num">%s</td></tr>' "$(find "$O/content" -type f 2>/dev/null | wc -l | tr -d ' ')"
+      [[ -d "$O/screenshots" ]] && printf '<tr><td>Screenshots</td><td class="num">%s</td></tr>' "$(find "$O/screenshots" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+      printf '</table></div>'
+    fi
+
+    # scope leads
+    if [[ -s "$O/scope_expansion/asn_cidrs.txt" || -s "$O/scope_expansion/related_domains.txt" ]]; then
+      printf '<h3>Scope-expansion leads (review only — not scanned)</h3><div class="tablewrap"><table>'
+      printf '<tr><th>Lead</th><th>Count</th><th>File</th></tr>'
+      _ASSET_ROW "ASN / CIDR ranges"    "$O/scope_expansion/asn_cidrs.txt"
+      _ASSET_ROW "Related root domains" "$O/scope_expansion/related_domains.txt"
+      printf '</table></div><p class="legend">Confirm each is in your program scope before testing it.</p>'
+    fi
+    printf '</section>\n'
+
+    printf '<footer>Generated by Scout — recon automation. Stay in scope; respect program rules and rate limits.<br>User-Agent: <span class="mono">%s</span></footer>\n' "$(_ESC "${SCOUT_UA:-unset}")"
+    printf '</div></body></html>\n'
+  } > "$HTML"
+
+  OK "HTML report -> $HTML"
+  return 0
+}

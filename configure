@@ -8,8 +8,9 @@ BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOL
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
-INSTALL_DIR="${HOME}/scout"
-WORKSPACE_DIR="${INSTALL_DIR}/workspace"
+# Hardcoded install locations — absolute literals, independent of $HOME.
+INSTALL_DIR="/opt/scout"
+WORKSPACE_DIR="/opt/scout/workspace"
 FORCE=0
 UPDATE=0
 UNINSTALL=0
@@ -58,13 +59,27 @@ EOF
 # ---------------- CLEAN EXIT ----------------
 trap 'ERR "Installation interrupted"; exit 1' INT TERM
 
-# ---------------- REQUIRE ROOT ----------------
+# ---------------- PRIVILEGES ----------------
+# Scout installs into /opt/scout (root-owned) and runs as root, so the installer
+# requires root. MAYBE_SUDO mirrors the cmd/lib helper (empty when already root).
+MAYBE_SUDO() {
+  (( EUID == 0 )) && return 0
+  command -v sudo >/dev/null 2>&1 && printf 'sudo'
+  return 0
+}
+# REQUIRE_ROOT enforces root: error, prompt for the password, and re-exec the
+# whole configure invocation under `sudo -E` (preserving SCOUT_REINSTALL etc.),
+# then proceed. Mirrors the cmd/lib version, which configure cannot source (it
+# must stay self-contained to run via `curl | bash`). Call as REQUIRE_ROOT "$@".
 REQUIRE_ROOT() {
-  if (( EUID != 0 )); then
-    echo -e "${RED}[X] Root privileges required.${RESET}"
-    echo -e "${YELLOW}[*] Re-running with sudo...${RESET}\n"
-    exec sudo -E bash "$0" "$@"  # Preserve env and args
+  (( EUID == 0 )) && return 0
+  ERR "This installer must be run as root."
+  if command -v sudo >/dev/null 2>&1; then
+    INFO "Re-running as root via sudo (you may be prompted for your password)..."
+    exec sudo -E -- "$0" "$@"
   fi
+  ERR "sudo is not available — re-run this command as root."
+  exit 1
 }
 
 # ---------------- DEP CHECK ----------------
@@ -91,16 +106,38 @@ EOF
 }
 
 # ---------------- INSTALL STEPS ----------------
-# All three install paths ended with the same three lines, and two of them
-# cloned with the same flags.
+# Where this configure actually lives. When run from a local checkout (`sudo
+# ./configure`), SELF_DIR is that checkout; when run via `curl | bash`, $0 is not
+# a real file and SELF_DIR resolves to something without a cmd/installer.
+SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd || true)"
+
+# Populate INSTALL_DIR with the source. Prefer the local checkout so `./configure`
+# installs the code you are actually editing; fall back to cloning the published
+# repo for the `curl | bash` path. (Historically this always cloned, so a local
+# `configure --force` silently reinstalled stale remote code and ignored every
+# local edit — the tools even landed in the remote's $HOME/scout paths.)
 CLONE_REPO() {
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
-    OK "Repository cloned"
+    if [[ -n "$SELF_DIR" && -f "$SELF_DIR/cmd/installer" && "$SELF_DIR" != "$INSTALL_DIR" ]]; then
+        INFO "Installing from local checkout: $SELF_DIR"
+        mkdir -p "$INSTALL_DIR"
+        # Copy the checkout, then drop VCS/scan artifacts that must not ship into
+        # the install tree (workspace is preserved separately by --force).
+        cp -a "$SELF_DIR/." "$INSTALL_DIR/"
+        rm -rf "$INSTALL_DIR/.git" "$INSTALL_DIR/workspace"
+        OK "Installed source from local checkout"
+    else
+        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
+        OK "Repository cloned"
+    fi
 }
 
 RUN_INSTALLER() {
     INFO "Running installer..."
     chmod -R +x "$INSTALL_DIR/cmd/"
+    # cmd/installer skips anything already on disk. --force means "rebuild it
+    # all", which it reads from SCOUT_REINSTALL (it takes no arguments of its
+    # own, and REQUIRE_ROOT re-execs with `sudo -E`, so the env var survives).
+    (( FORCE )) && export SCOUT_REINSTALL=1
     bash "$INSTALL_DIR/cmd/installer"
 }
 
@@ -117,8 +154,11 @@ for ARG in "$@"; do
     esac
 done
 
-# ---------------- MAIN ----------------a
+# ---------------- MAIN ----------------
 BANNER
+# Enforce root for every real operation (install/update/force/uninstall). Version
+# and help are handled during argument parsing above and exit before reaching
+# here, so they still work without root.
 REQUIRE_ROOT "$@"
 CHECK_DEPS
 
@@ -141,9 +181,17 @@ if (( UNINSTALL )); then
         fi
     fi
     INFO "Uninstalling..."
+    # Everything — binaries, pipx venvs, wordlists, gf patterns — lives under
+    # INSTALL_DIR, so one rm removes it all. The only external artifact is the
+    # /usr/local/bin/scout symlink.
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Removed $INSTALL_DIR"
-    pipx uninstall subdominator > /dev/null 2>&1 || true
-    [[ -L /usr/local/bin/scout ]] && rm -f /usr/local/bin/scout && OK "Removed symlink"
+    [[ -L /usr/local/bin/scout ]] && { $(MAYBE_SUDO) rm -f /usr/local/bin/scout && OK "Removed /usr/local/bin/scout"; }
+    # The gf patterns lived under INSTALL_DIR; the euid's .gf was a symlink into
+    # it, now dangling — drop it if so (only when it points into INSTALL_DIR).
+    GFDIR="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)/.gf"
+    if [[ -L "$GFDIR" ]] && [[ "$(readlink "$GFDIR")" == "$INSTALL_DIR"/* ]]; then
+      rm -f "$GFDIR" && OK "Removed gf symlink $GFDIR"
+    fi
     OK "Uninstalled successfully."
     exit 0
 fi

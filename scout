@@ -4,14 +4,24 @@ IFS=$' \t\n'
 
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
 VER="v0.1"
-INSTALL_DIR="${HOME}/scout"
-TOOLS_DIR="${INSTALL_DIR}/tools"
-BIN_DIR="${TOOLS_DIR}/bin"
-WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
-WORKSPACE_DIR="${INSTALL_DIR}/workspace"
-FORCE=0
-UPDATE=0
-UNINSTALL=0
+# Hardcoded install locations. Scout is installed to, and run from, /opt/scout;
+# tools, wordlists and the resolver list live at fixed paths under it. These are
+# absolute literals on purpose — they do NOT depend on $HOME or the invoking
+# user, so `scout` finds the same toolset no matter who (root) runs it.
+INSTALL_DIR="/opt/scout"
+TOOLS_DIR="/opt/scout/tools"
+BIN_DIR="/opt/scout/tools/bin"
+WORDLISTS_DIR="/opt/scout/tools/wordlists"
+RESOLVERS_FILE="/opt/scout/tools/wordlists/resolvers.txt"
+# gf resolves its pattern dir from the euid's passwd home + /.gf (ignores $HOME).
+# The pattern FILES are stored here under /opt/scout, and the passwd-home .gf
+# (e.g. /root/.gf) is symlinked to $GF_HOME/.gf by GF_LINK_HOME (cmd/lib).
+GF_HOME="/opt/scout/tools/gf-home"
+# pipx installs subdominator/bbot/arjun into venvs under here (set by the
+# installer); scout only needs the symlinks in BIN_DIR, but the constant is kept
+# alongside the others so all install locations live in one place.
+PIPX_HOME="/opt/scout/tools/pipx"
+WORKSPACE_DIR="/opt/scout/workspace"
 
 # ---------------- SCRIPT LOCATION ----------------
 # Resolve where this script actually lives so scout works from any checkout,
@@ -24,6 +34,16 @@ CMDS_DIR="${SCRIPT_DIR}/cmd"
 # ---------------- SHARED LIB (colors, logging, spinner, banner, root check) ----------------
 source "${CMDS_DIR}/lib"
 
+# Scout must run as root: it installs to and runs from /opt/scout, and privileged
+# stages (raw-socket port scans) need it. REQUIRE_ROOT errors, prompts for the
+# password, and re-execs the whole invocation under sudo. Done before any work so
+# the re-exec restarts cleanly with the original arguments.
+REQUIRE_ROOT "$@"
+
+# Whole-run clock. Set the moment the library is available (before the banner)
+# so "total time" in the report reflects the entire invocation. NOW is fork-free.
+NOW SCOUT_SCRIPT_START
+
 # ---------------- ARGS ----------------
 INPUT_DOMAIN=""
 INPUT_DOMAIN_FILE=""
@@ -32,7 +52,11 @@ INPUT_WILDCARD_FILE=""
 CUSTOM_OUTPUT=""
 INPUT_DOMAIN_ALL_FILE=""
 INPUT_WILDCARD_ALL_FILE=""
+INPUT_WILDCARD_BASE_FILE=""
 RESOLVED_OUT=""
+INPUT_EXCLUDE=""            # -xc  out-of-scope hosts, comma-separated
+INPUT_EXCLUDE_FILE=""       # -xf  out-of-scope hosts, one per line
+EXCLUDE_ALL_FILE=""         # built: normalized exclusion list
 
 # ---------------- HELP ----------------
 USAGE() {
@@ -43,6 +67,12 @@ You can provide single or multiple comma-separated values for -dm and -wc:
   -df   <file>                               File with one domain per line
   -wc   <*.domain1.com,*.domain2.com,...>    One or more wildcard domains
   -wf   <file>                               File with one wildcard per line
+
+Scope control (keeps the run inside program rules):
+  -xc   <host1,host2,...>                     Out-of-scope hosts to exclude
+  -xf   <file>                               Out-of-scope hosts, one per line
+        (an excluded host removes that host AND everything under it, so
+         "*.example.com except support.example.com" is -wc + -xc support.example.com)
 
 Optional:
   -o <dir>                                   Custom output directory (under $WORKSPACE_DIR)
@@ -65,7 +95,7 @@ EOF
 }
 
 BANNER
-REQUIRE_ROOT "$@"
+# Root is enforced above by REQUIRE_ROOT, so by here EUID is 0.
 
 # ---------------- ARGUMENT PARSING ----------------
 if [[ $# -eq 0 ]]; then
@@ -87,6 +117,12 @@ while [[ $# -gt 0 ]]; do
     -wf)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -wf requires a file path."; USAGE; }
       INPUT_WILDCARD_FILE="$2"; shift 2;;
+    -xc)
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -xc requires argument(s)."; USAGE; }
+      INPUT_EXCLUDE="$2"; shift 2;;
+    -xf)
+      [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -xf requires a file path."; USAGE; }
+      INPUT_EXCLUDE_FILE="$2"; shift 2;;
     -o)
       [[ -z "${2:-}" || "${2:0:1}" == "-" ]] && { ERR "Option -o requires a directory name."; USAGE; }
       CUSTOM_OUTPUT="$2"; shift 2;;
@@ -146,14 +182,49 @@ else
 fi
 mkdir -p "$OUTPUT_DIR"
 
-# ---------------- SPINNER & CLEANUP ----------------
+# ---------------- TELEMETRY ----------------
+# Per-tool and per-phase timing/command logs the HTML report is built from.
+# Kept under a dot-dir so it doesn't clutter the results tree.
+SCOUT_TELEMETRY="$OUTPUT_DIR/.telemetry/tools.tsv"
+SCOUT_PHASES_LOG="$OUTPUT_DIR/.telemetry/phases.tsv"
+SCOUT_PHASE=""
+TELEMETRY_INIT
+
+# ---------------- SPINNER, CLEANUP & INTERRUPT ----------------
+# CLEANUP runs on normal EXIT: stop the spinner and clear its line. It must NOT
+# exit (we are already exiting).
 CLEANUP() {
   if [[ -n "${SPINNER_PID:-}" ]]; then
     kill "$SPINNER_PID" 2>/dev/null || true
   fi
   echo -ne "\r\033[K"
 }
-trap CLEANUP SIGINT SIGTERM EXIT
+
+# ON_INTERRUPT runs on Ctrl+C (SIGINT) or SIGTERM and STOPS THE WHOLE RUN
+# immediately. The old handler only killed the spinner and returned, so — because
+# every tool call is wrapped in `|| true` to survive a non-zero exit — the loop
+# simply advanced to the next tool instead of aborting. Here we detach the trap
+# (so a second Ctrl+C can't re-enter), tear down the spinner, kill the tool that
+# is running now plus any children it spawned (whole process group), and exit.
+# The EXIT trap (CLEANUP) still fires afterwards for a final line-clear.
+ON_INTERRUPT() {
+  trap - SIGINT SIGTERM
+  if [[ -n "${SPINNER_PID:-}" ]]; then
+    kill "$SPINNER_PID" 2>/dev/null || true
+  fi
+  echo -ne "\r\033[K"
+  echo -e "\n${RED}${BOLD}[X] Interrupted — stopping scan.${RESET}" >&2
+  # Backstop-kill any CHILD processes still running (the current tool and what it
+  # forked). We signal children only, NOT our own process group, so this handler
+  # runs to completion and exits cleanly (killing our own group here would take
+  # bash down before the message flushes and before exit 130). On an interactive
+  # Ctrl+C the terminal already SIGINT'd the whole foreground group, so the tool
+  # is usually gone by now anyway — this just catches anything that ignored it.
+  pkill -TERM -P $$ 2>/dev/null || true
+  exit 130
+}
+trap ON_INTERRUPT SIGINT SIGTERM
+trap CLEANUP EXIT
 
 # ---------------- BASIC CHECKS ----------------
 CHECK_INTERNET(){
@@ -166,25 +237,58 @@ CHECK_INTERNET(){
   OK "Online"
 }
 
+# Tools are checked in tiers, because "missing" means different things.
+# A flat list treated a missing nuclei (a stage that isn't wired up yet) the
+# same as a missing resolver (no DNS resolution at all), so a correct install
+# still printed an alarming "Missing tools:" line on every run.
+#
+# Sets DNS_READY, which gates the resolve stage further down.
+DNS_READY=1
 CHECK_BINS(){
-  REQUIRED=(subfinder assetfinder findomain subdog gau waybackurls cero xsubfind3r unfurl gf httpx dnsx massdns puredns ffuf nuclei naabu subdominator)
-  MISSING=()
-  for b in "${REQUIRED[@]}"; do
-    if ! command -v "$b" >/dev/null 2>&1 && [[ ! -x "$BIN_DIR/$b" ]]; then
-      MISSING+=("$b")
-    fi
-  done
+  # Without these, resolution cannot happen at all. dnsx replaced
+  # puredns+massdns: puredns only drives the massdns binary, which this
+  # project no longer builds.
+  local DNS_TOOLS=(dnsx)
+  # Discovery sources. Each wrapper in cmd/collect_subdomains also skips itself
+  # when its tool is absent, so a missing one costs that source, not the run.
+  local DISCOVERY_TOOLS=(subfinder assetfinder findomain subdog xsubfind3r cero
+                         subdominator amass bbot gau alterx github-subdomains chaos)
+  # Used by the probing / URL / JS / analysis stages. Each stage self-skips when
+  # its tool is missing, so absence degrades that stage rather than the run.
+  local WEB_TOOLS=(httpx waybackurls katana hakrawler gf unfurl)
+  # Active-scanning stages, off unless their SCOUT_* gate is set. ffuf drives
+  # content-discovery; subzy drives takeover (nuclei fallback); dalfox drives
+  # XSS; arjun/qsreplace drive parameter discovery and the OWASP sweep;
+  # gitdorks_go drives GitHub dorking. All informational — each stage self-skips.
+  local ACTIVE_TOOLS=(nuclei naabu ffuf subzy dalfox arjun qsreplace Gxss gitdorks_go)
+  local B MISSING_DNS=() MISSING_DISC=() MISSING_WEB=() MISSING_ACTIVE=()
+
+  for B in "${DNS_TOOLS[@]}";       do HAVE_TOOL "$B" || MISSING_DNS+=("$B");    done
+  for B in "${DISCOVERY_TOOLS[@]}"; do HAVE_TOOL "$B" || MISSING_DISC+=("$B");   done
+  for B in "${WEB_TOOLS[@]}";       do HAVE_TOOL "$B" || MISSING_WEB+=("$B");    done
+  for B in "${ACTIVE_TOOLS[@]}";    do HAVE_TOOL "$B" || MISSING_ACTIVE+=("$B"); done
   # sublist3r is a cloned python repo, not a binary — a bare -x test on the
   # directory always passes, so check for the script itself.
-  [[ -f "$BIN_DIR/sublist3r/sublist3r.py" ]] || MISSING+=(sublist3r)
+  [[ -f "$BIN_DIR/sublist3r/sublist3r.py" ]] || MISSING_DISC+=(sublist3r)
 
-  if (( ${#MISSING[@]} > 0 )); then
-    ERR "Missing tools: ${MISSING[*]}"
-    # `return`, not `exit`: the caller uses `CHECK_BINS || true` to keep this
-    # advisory. `exit` would terminate the whole script regardless of `||`.
-    return 1
+  if (( ${#MISSING_DNS[@]} > 0 )); then
+    DNS_READY=0
+    ERR "DNS resolution unavailable — missing: ${MISSING_DNS[*]}"
+    ERR "Run 'scout install --update' to install it."
   fi
-  OK "All required tools found"
+  # resolvers.txt is a nice-to-have, not a requirement: dnsx ships with its own
+  # resolvers and cmd/collect_live passes -r only when the file exists. massdns
+  # was the one that refused to start without a list.
+  [[ -s "$RESOLVERS_FILE" ]] || WARN "No resolvers list at $RESOLVERS_FILE — dnsx will use its built-in resolvers."
+  (( ${#MISSING_DISC[@]} > 0 )) && WARN "Discovery sources not installed (they will be skipped): ${MISSING_DISC[*]}"
+  (( ${#MISSING_WEB[@]} > 0 )) && WARN "Probing/URL/JS tools not installed (those stages will be skipped): ${MISSING_WEB[*]}"
+  (( ${#MISSING_ACTIVE[@]} > 0 )) && INFO "Active-scan tools missing (only used with SCOUT_NUCLEI=1 / SCOUT_PORTSCAN=1 / SCOUT_FFUF=1 / SCOUT_TAKEOVER=1): ${MISSING_ACTIVE[*]}"
+  (( ${#MISSING_DNS[@]} + ${#MISSING_DISC[@]} + ${#MISSING_WEB[@]} == 0 )) && OK "All tools used by this pipeline found"
+
+  # `return`, not `exit`: the caller uses `CHECK_BINS || true` to keep this
+  # advisory. `exit` would terminate the whole script regardless of `||`.
+  (( ${#MISSING_DNS[@]} + ${#MISSING_DISC[@]} == 0 )) || return 1
+  return 0
 }
 
 # ---------------- INPUT VALIDATION ----------------
@@ -194,11 +298,14 @@ if [[ -z "$INPUT_DOMAIN" && -z "$INPUT_DOMAIN_FILE" && -z "$INPUT_WILDCARD" && -
 fi
 
 # ---------------- BUILD TARGETS ----------------
-# Merge a comma-separated list and/or a file of targets into one deduped file.
-# The domain and wildcard paths were byte-for-byte identical apart from their
-# variable names. Trimming is done with parameter expansion rather than
-# `printf | sed`, and blank entries (e.g. "a.com,,b.com") are dropped instead
-# of becoming empty lines that later stages have to skip.
+# Two steps, deliberately separate:
+#   BUILD_TARGET_LIST  collects raw entries from the flag and/or the file,
+#                      in the order they were supplied.
+#   BUILD_CLEAN_LIST   turns raw entries into the canonical, deduped,
+#                      star-free list every later stage is allowed to read.
+#
+# The raw step no longer ends in `sort -u`: dedupe happens in BUILD_CLEAN_LIST
+# via DEDUPE, which keeps the order targets were given in.
 BUILD_TARGET_LIST() {
   local OUT_FILE="$1" CSV="$2" SRC_FILE="$3"
   : > "$OUT_FILE"
@@ -214,20 +321,91 @@ BUILD_TARGET_LIST() {
   fi
 
   if [[ -n "$SRC_FILE" ]]; then
-    awk 'NF && $1 !~ /^#/' "$SRC_FILE" >> "$OUT_FILE"
+    if [[ -r "$SRC_FILE" ]]; then
+      awk 'NF && $1 !~ /^#/' "$SRC_FILE" >> "$OUT_FILE"
+    else
+      ERR "Cannot read input file: $SRC_FILE"
+    fi
   fi
+}
 
-  sort -u "$OUT_FILE" -o "$OUT_FILE"
+# BUILD_CLEAN_LIST <raw file> <out file> <domain|wildcard>
+#
+# Validates entry by entry so a bad line can be named in the warning instead
+# of just vanishing from a count, then dedupes the survivors.
+#   domain kind: a "*" is a user error. Per the agreed behaviour we keep the
+#     target and resolve its apex — dropping it outright would silently cost
+#     someone a target for the whole scan — but say so, because -dm/-df never
+#     enumerate and the user probably wanted -wc/-wf.
+#   wildcard kind: "*.example.com" is the expected form and canonicalizes to
+#     its apex. Anything else containing "*" has no apex and is rejected.
+BUILD_CLEAN_LIST() {
+  local RAW="$1" OUT="$2" KIND="$3" LINE BASE
+  : > "$OUT"
+  [[ -f "$RAW" ]] || return 0
+
+  # NOTE: append per entry rather than redirecting the whole loop
+  # (`done < "$RAW" >> "$OUT"`). That redirection also captures the WARNs
+  # below into the list file, where PREP_LIST then quietly drops them as
+  # invalid hostnames — so the file ends up correct and the user is never told
+  # why their target changed.
+  while IFS= read -r LINE; do
+    [[ -n "${LINE//[[:space:]]/}" ]] || continue
+    if BASE=$(PREP_TARGET "$LINE"); then
+      if [[ "$KIND" == "domain" && "$LINE" == *'*'* ]]; then
+        WARN "-dm/-df '$LINE': wildcards are not allowed here — using '$BASE' (resolve only)."
+        WARN "  Pass it to -wc/-wf if you want subdomain discovery."
+      fi
+      printf '%s\n' "$BASE" >> "$OUT"
+    else
+      WARN "Ignoring '$LINE': not a usable domain ('*' is only allowed as a leading '*.')."
+    fi
+  done < "$RAW"
+
+  # PREP_TARGET already normalized and validated each entry; this dedupes
+  # them, in first-seen order.
+  PREP_LIST "$OUT" "$([[ "$KIND" == "domain" ]] && echo "domains (-dm/-df)" || echo "wildcards (-wc/-wf)")"
 }
 
 if [[ -n "$INPUT_DOMAIN" || -n "$INPUT_DOMAIN_FILE" ]]; then
   INPUT_DOMAIN_ALL_FILE="$OUTPUT_DIR/domains_all.txt"
-  BUILD_TARGET_LIST "$INPUT_DOMAIN_ALL_FILE" "$INPUT_DOMAIN" "$INPUT_DOMAIN_FILE"
+  RAW_DOMAINS="$OUTPUT_DIR/.domains_raw.txt"
+  BUILD_TARGET_LIST "$RAW_DOMAINS" "$INPUT_DOMAIN" "$INPUT_DOMAIN_FILE"
+  BUILD_CLEAN_LIST "$RAW_DOMAINS" "$INPUT_DOMAIN_ALL_FILE" domain
+  rm -f "$RAW_DOMAINS"
+  [[ -s "$INPUT_DOMAIN_ALL_FILE" ]] || { WARN "No usable domains from -dm/-df."; INPUT_DOMAIN_ALL_FILE=""; }
 fi
 
 if [[ -n "$INPUT_WILDCARD" || -n "$INPUT_WILDCARD_FILE" ]]; then
+  # wildcards_all.txt keeps the input verbatim, stars and all: it is the record
+  # of what was asked for, and the ONLY list in the run where a "*" is legal.
+  # Every stage reads wildcards_base.txt instead, so nothing downstream can
+  # carry a star — that is a property of which file they open, not of a check.
   INPUT_WILDCARD_ALL_FILE="$OUTPUT_DIR/wildcards_all.txt"
+  INPUT_WILDCARD_BASE_FILE="$OUTPUT_DIR/wildcards_base.txt"
   BUILD_TARGET_LIST "$INPUT_WILDCARD_ALL_FILE" "$INPUT_WILDCARD" "$INPUT_WILDCARD_FILE"
+  BUILD_CLEAN_LIST "$INPUT_WILDCARD_ALL_FILE" "$INPUT_WILDCARD_BASE_FILE" wildcard
+  [[ -s "$INPUT_WILDCARD_BASE_FILE" ]] || { WARN "No usable wildcard targets from -wc/-wf."; INPUT_WILDCARD_BASE_FILE=""; }
+fi
+
+# ---------------- OUT-OF-SCOPE EXCLUSIONS ----------------
+# Build the exclusion list once (normalized, deduped, validated). EXCLUDE_HOSTS
+# is applied to the discovery and resolved sets below so an out-of-scope host —
+# and everything under it — never reaches probing or scanning.
+if [[ -n "$INPUT_EXCLUDE" || -n "$INPUT_EXCLUDE_FILE" ]]; then
+  EXCLUDE_ALL_FILE="$OUTPUT_DIR/out_of_scope_input.txt"
+  RAW_EXCL="$OUTPUT_DIR/.exclude_raw.txt"
+  BUILD_TARGET_LIST "$RAW_EXCL" "$INPUT_EXCLUDE" "$INPUT_EXCLUDE_FILE"
+  # Reuse the host gate: NORMALIZE_HOSTS strips a leading "*." so an excluded
+  # "*.support.example.com" canonicalizes to support.example.com and its subtree.
+  NORMALIZE_HOSTS < "$RAW_EXCL" | DEDUPE | VALID_HOSTS > "$EXCLUDE_ALL_FILE" || true
+  rm -f "$RAW_EXCL"
+  if [[ -s "$EXCLUDE_ALL_FILE" ]]; then
+    INFO "Out-of-scope exclusions loaded: $(COUNT_LINES "$EXCLUDE_ALL_FILE") host(s)/subtree(s)."
+  else
+    WARN "No usable entries in -xc/-xf; nothing excluded."
+    EXCLUDE_ALL_FILE=""
+  fi
 fi
 
 # ---------------- SUMMARY ----------------
@@ -253,18 +431,36 @@ SUMMARIZE_TARGETS() {
   fi
 }
 SUMMARIZE_TARGETS "Domains"   "domains"   "domains"          "-dm/-df" "$INPUT_DOMAIN_ALL_FILE"
-SUMMARIZE_TARGETS "Wildcards" "wildcards" "wildcard domains" "-wc/-wf" "$INPUT_WILDCARD_ALL_FILE"
+SUMMARIZE_TARGETS "Wildcards" "wildcards" "wildcard domains" "-wc/-wf" "$INPUT_WILDCARD_BASE_FILE"
 echo -e "${RESET}"
 
 INFO "Output Directory: $OUTPUT_DIR"
 echo -e ""
 echo -e "${BOLD}Tools Used:${RESET}"
 cat <<'EOF'
-  • Subdomain enumeration: subfinder, assetfinder, findomain, subdog, xsubfind3r, cero, crt.sh, sublist3r, subdominator
-  • Live host discovery: dnsx, puredns, httpx
-  • Port scanning: naabu
-  • Directory fuzzing: ffuf
-  • Vulnerability scanning: nuclei
+  • Subdomain enumeration (passive): subfinder, assetfinder, findomain, subdog, xsubfind3r, cero,
+    crt.sh, sublist3r, subdominator, amass, bbot, gau, chaos*, github-subdomains*,
+    rapiddns, certspotter, hackertarget, subdomain.center, urlscan.io
+  • Subdomain enumeration (active): dnsx brute force, alterx permutations
+    (SCOUT_BRUTE=0 / SCOUT_PERMUTE=0 to skip)
+  • DNS resolution: dnsx
+  • Live HTTP probing: httpx (status/title/tech/server/CDN)  (SCOUT_HTTP=0 to skip)
+  • URL collection: gau, waybackurls          (SCOUT_URLS=0 to skip)
+  • URL analysis: gf patterns + unfurl        (SCOUT_ANALYZE=0 to skip)
+  • JS collection: gau, waybackurls, katana, hakrawler  (SCOUT_JS=0 to skip)
+  • JS analysis: jsluice (endpoints + secrets)  (SCOUT_JS_ANALYZE=0 to skip)
+  • Vulnerability scan: nuclei (tech-targeted -as)  [ACTIVE, SAFE — SCOUT_NUCLEI=0 to skip]
+  • Subdomain takeover: subzy (nuclei fallback)  [ACTIVE, SAFE — SCOUT_TAKEOVER=0 to skip]
+  • Parameter discovery: arjun + qsreplace       [ACTIVE, SAFE — SCOUT_PARAMS=0 to skip]
+  • XSS: dalfox (+ Gxss)                          [ACTIVE, SAFE — SCOUT_XSS=0 to skip]
+  • OWASP Top-10 (LFI/RFI/SQLi/redirect/SSRF + nuclei DAST)  [ACTIVE, SAFE — SCOUT_OWASP=0 to skip]
+  • Favicon-hash pivoting: httpx -favicon         [ACTIVE — off unless SCOUT_FAVICON=1]
+  • GitHub dorking: gitdorks_go (needs GITHUB_TOKEN)  [off unless SCOUT_GITHUB_DORK=1]
+  • Content discovery: ffuf     [ACTIVE — off unless SCOUT_FFUF=1]
+  • Port scan: naabu (+ nmap)   [ACTIVE — off unless SCOUT_PORTSCAN=1]
+  • Screenshots: gowitness      [off unless SCOUT_SCREENSHOTS=1]
+  • Scope/ASN expansion: asnmap, amass intel  [REVIEW-ONLY — SCOUT_ASN=1]
+  * = needs a free API token (PDCP_API_KEY / GITHUB_TOKEN); skipped silently when unset
 EOF
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
@@ -283,22 +479,85 @@ SOURCE_CMD() {
     eval "${stub}(){ INFO \"${func}: not implemented (stub)\"; }"
   fi
 }
+SOURCE_CMD "asn_expand"
 SOURCE_CMD "collect_subdomains"
 SOURCE_CMD "collect_live"
+SOURCE_CMD "collect_http"
+SOURCE_CMD "collect_urls"
+SOURCE_CMD "analyze_urls"
 SOURCE_CMD "collect_js"
-# SOURCE_CMD "port_scan"
-# SOURCE_CMD "service_scan"
-# SOURCE_CMD "nuclei_scan"
-export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR WORKSPACE_DIR OUTPUT_DIR INPUT_DOMAIN_ALL_FILE INPUT_WILDCARD_ALL_FILE
+SOURCE_CMD "analyze_js"
+SOURCE_CMD "content_discovery"
+SOURCE_CMD "nuclei_scan"
+SOURCE_CMD "takeover"
+SOURCE_CMD "param_discovery"
+SOURCE_CMD "scan_xss"
+SOURCE_CMD "scan_owasp"
+SOURCE_CMD "favicon"
+SOURCE_CMD "github_dork"
+SOURCE_CMD "port_scan"
+SOURCE_CMD "service_scan"
+SOURCE_CMD "screenshot"
+SOURCE_CMD "report"
+
+# ---------------- SAFETY / RULES-OF-ENGAGEMENT DEFAULTS ----------------
+# SCOUT_SAFE (default on) keeps the run inside "don't harm the target": active
+# scanners are rate-limited and nuclei's destructive template classes (DoS,
+# fuzzing) are excluded. SCOUT_UA identifies the scanner — set it to include
+# your program handle where the rules ask for it. Both are exported so every
+# sourced stage sees the same policy.
+export SCOUT_SAFE="${SCOUT_SAFE:-1}"
+export SCOUT_UA="${SCOUT_UA:-scout-recon/${VER} (bug-bounty recon; set SCOUT_UA to your researcher handle)}"
+
+# ---------------- ACTIVE VULN-CHECK DEFAULTS ----------------
+# These stages send real (but SCOUT_SAFE-rate-limited, non-destructive) traffic
+# to in-scope hosts and are now ON by default so a plain run performs the core
+# bug-bounty vuln checks — nuclei (tech-targeted), subdomain takeover, parameter
+# discovery, XSS, and the OWASP Top-10 sweep (incl. SSRF/LFI/SQLi/redirect).
+# Opt OUT of any of them with SCOUT_<X>=0. They all read final_subdomains.out
+# (resolved subdomains + plain -dm/-df domains) or its httpx-live subset, so the
+# out-of-scope exclusions still apply and nothing dead/excluded is touched.
+#
+# Deliberately still OFF by default (opt IN with =1): the high-volume request
+# floods — CONTENT_DISCOVERY/ffuf (~38k requests/host) and PORT_SCAN/naabu — plus
+# the review-only ASN_EXPAND, FAVICON, GITHUB_DORK and SCREENSHOT. Turning those
+# on by default would contradict "don't flood the target".
+export SCOUT_NUCLEI="${SCOUT_NUCLEI:-1}"
+export SCOUT_TAKEOVER="${SCOUT_TAKEOVER:-1}"
+export SCOUT_PARAMS="${SCOUT_PARAMS:-1}"
+export SCOUT_XSS="${SCOUT_XSS:-1}"
+export SCOUT_OWASP="${SCOUT_OWASP:-1}"
+
+export INSTALL_DIR TOOLS_DIR BIN_DIR WORDLISTS_DIR RESOLVERS_FILE GF_HOME PIPX_HOME WORKSPACE_DIR OUTPUT_DIR INPUT_DOMAIN_ALL_FILE INPUT_WILDCARD_ALL_FILE INPUT_WILDCARD_BASE_FILE EXCLUDE_ALL_FILE
+# Telemetry state the sourced stages append to (REC_TOOL) and the report reads.
+export SCOUT_TELEMETRY SCOUT_PHASES_LOG SCOUT_PHASE SCOUT_SCRIPT_START
 
 # ---------------- MAIN EXECUTION ----------------
 INFO "Starting Scout"
+echo -e "${BOLD}${YELLOW}Rules of engagement:${RESET} test only assets in your program scope."
+echo -e "  Safe mode: ${BOLD}$([[ "$SCOUT_SAFE" == "1" ]] && echo ON || echo OFF)${RESET} (rate-limited, non-destructive; SCOUT_SAFE=0 to disable)"
+[[ -n "$EXCLUDE_ALL_FILE" ]] && echo -e "  Out-of-scope exclusions: ${BOLD}$(COUNT_LINES "$EXCLUDE_ALL_FILE")${RESET} host(s)/subtree(s) will be dropped."
+echo -e ""
 CHECK_INTERNET
 CHECK_BINS || true
 
+# ---------------- SCOPE / ASN EXPANSION (opt-in, review-only) ----------------
+# Runs first so its leads are ready for review, but its output is NEVER fed into
+# the scanning stages — see cmd/asn_expand.
+if [[ "${SCOUT_ASN:-0}" == "1" ]]; then
+  PHASE_BEGIN "Scope & ASN Expansion"
+  INFO "Expanding scope leads (asnmap, amass intel) — review-only..."
+  ASN_EXPAND
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+
 # Collect subdomains for each domain
 COMBINED_SUBS="$OUTPUT_DIR/subdomains/combined_subdomains.txt"
-if [[ -f "$INPUT_WILDCARD_ALL_FILE" ]]; then
+# Iterate the BASE list, never wildcards_all.txt: the star was resolved away at
+# input, so no stage below ever sees one.
+if [[ -n "$INPUT_WILDCARD_BASE_FILE" && -f "$INPUT_WILDCARD_BASE_FILE" ]]; then
+  PHASE_BEGIN "Subdomain Enumeration"
   while read -r DOMAIN; do
     echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
     DOMAIN="${DOMAIN//[[:space:]]/}"   # pure bash; was `echo | tr` (2 forks/domain)
@@ -308,14 +567,19 @@ if [[ -f "$INPUT_WILDCARD_ALL_FILE" ]]; then
     mkdir -p "$DOMAIN_OUTPUT_DIR"
     export DOMAIN DOMAIN_OUTPUT_DIR
     COLLECT_SUBDOMAINS
-  done < "$INPUT_WILDCARD_ALL_FILE"
+  done < "$INPUT_WILDCARD_BASE_FILE"
   # sort -u: without it this is a raw concatenation and the count below
   # double-counts hosts found under overlapping wildcards.
-  find "$OUTPUT_DIR/subdomains" -type f -name "all_subdomains.txt" -exec cat {} + 2>/dev/null |
+  # `awk 1`, not `cat`: a per-domain file that ends without a newline would
+  # otherwise glue its last host onto the first host of the next file.
+  find "$OUTPUT_DIR/subdomains" -type f -name "all_subdomains.txt" -exec awk 1 {} + 2>/dev/null |
     sort -u > "$COMBINED_SUBS" || true
+  PREP_LIST "$COMBINED_SUBS" "Combined subdomains"
+  EXCLUDE_HOSTS "$COMBINED_SUBS" "$EXCLUDE_ALL_FILE"
   COUNT=$(COUNT_LINES "$COMBINED_SUBS")
   INFO "Total unique subdomains of all wildcards: $COUNT"
   INFO "Combined subdomains saved to: $COMBINED_SUBS"
+  PHASE_END
   echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 else
   WARN "No wildcard domains provided; skipping subdomain collection."
@@ -327,28 +591,206 @@ mkdir -p "$OUTPUT_DIR/resolved"
 RESOLVE_INPUT="$OUTPUT_DIR/resolved/resolve_input.txt"
 # Owned here rather than re-derived inside cmd/collect_live, so the path is
 # written down in exactly one place.
-RESOLVED_OUT="$OUTPUT_DIR/resolved/puredns_resolved.out"
-cat "$COMBINED_SUBS" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" 2>/dev/null |
-  sort -u > "$RESOLVE_INPUT" || true
+RESOLVED_OUT="$OUTPUT_DIR/resolved/dnsx_resolved.out"
+# Discovery results first (sorted), then the -dm/-df domains in the order they
+# were given; PREP_LIST's dedupe keeps the first occurrence, so no `sort -u`
+# here — that would throw the ordering away again.
+CAT_LINES "$COMBINED_SUBS" "${INPUT_DOMAIN_ALL_FILE:-}" > "$RESOLVE_INPUT" || true
+PREP_LIST "$RESOLVE_INPUT" "DNS input"
+# Belt and braces: PREP_LIST cannot leave a "*" behind, so this only fires if a
+# future change routes around it. It filters and reports rather than aborting.
+ASSERT_NO_STAR "$RESOLVE_INPUT" "DNS input" || true
 
-if [[ -s "$RESOLVE_INPUT" ]]; then
+if [[ ! -s "$RESOLVE_INPUT" ]]; then
+  WARN "Nothing to resolve; skipping live host discovery."
+elif (( DNS_READY == 0 )); then
+  WARN "Skipping live host discovery: DNS tooling is not installed (see above)."
+  WARN "Discovered hosts are still recorded in $COMBINED_SUBS."
+else
+  PHASE_BEGIN "DNS Resolution"
   export RESOLVE_INPUT RESOLVED_OUT
   COLLECT_LIVE
+  PHASE_END
   echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
-else
-  WARN "Nothing to resolve; skipping live host discovery."
 fi
 
 # Combine into final_subdomains.out. Plain domains are included even if
 # resolution was skipped or failed, so they're never silently dropped.
-cat "${RESOLVED_OUT:-/dev/null}" "${INPUT_DOMAIN_ALL_FILE:-/dev/null}" 2>/dev/null | sort -u > "$OUTPUT_DIR/final_subdomains.out" || true
+CAT_LINES "${RESOLVED_OUT:-}" "${INPUT_DOMAIN_ALL_FILE:-}" > "$OUTPUT_DIR/final_subdomains.out" || true
+PREP_LIST "$OUTPUT_DIR/final_subdomains.out" "Final hosts"
+# Out-of-scope guard at the last chokepoint before any probing/scanning: every
+# active stage below (httpx, nuclei, ffuf, naabu) derives from this file, so an
+# excluded host cannot be touched by any of them.
+EXCLUDE_HOSTS "$OUTPUT_DIR/final_subdomains.out" "$EXCLUDE_ALL_FILE"
+ASSERT_NO_STAR "$OUTPUT_DIR/final_subdomains.out" "Final hosts" || true
 COUNT=$(COUNT_LINES "$OUTPUT_DIR/final_subdomains.out")
 INFO "Total unique subdomains collected: $COUNT"
 INFO "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
-# TODO: JS collection (cmd/collect_js) is implemented but not yet wired into
-# the pipeline. It expects INPUT_WILDCARD_ALL_FILE and writes to $OUTPUT_DIR/js.
+# ---------------- HTTP PROBING (httpx) ----------------
+# The pivot every recon methodology puts right after resolution: turn resolved
+# hosts into the set that actually answers HTTP, fingerprinted. Its
+# http/live_hosts.txt feed is what the nuclei stage scans. Passive (HTTP GETs),
+# so it runs by default; SCOUT_HTTP=0 to skip. HTTP_LIVE is exported by the
+# stage for downstream consumers.
+HTTP_LIVE="$OUTPUT_DIR/http/live_hosts.txt"
+if [[ "${SCOUT_HTTP:-1}" == "1" && -s "$OUTPUT_DIR/final_subdomains.out" ]]; then
+  PHASE_BEGIN "HTTP Probing"
+  export HTTP_INPUT="$OUTPUT_DIR/final_subdomains.out"
+  INFO "Probing for live HTTP services (httpx)..."
+  COLLECT_HTTP
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+elif [[ "${SCOUT_HTTP:-1}" != "1" ]]; then
+  INFO "Skipping HTTP probing (SCOUT_HTTP=0)."
+fi
 
-echo -e "${BOLD}${GREEN}Scout run completed.${RESET}"
+# ---------------- URL / JS COLLECTION ----------------
+# Both stages enumerate over the WILDCARD targets — they widen to subdomains
+# themselves (gau --subs, waybackurls) — so they read wildcards_base.txt, like
+# subdomain enumeration, and are skipped when only plain -dm/-df domains were
+# given (which are resolved, never enumerated). They hit remote archives and
+# can be slow, so each has an opt-out: SCOUT_URLS=0 / SCOUT_JS=0. Neither needs
+# DNS resolution, so they run regardless of DNS_READY.
+if [[ -n "$INPUT_WILDCARD_BASE_FILE" && -f "$INPUT_WILDCARD_BASE_FILE" ]]; then
+  if [[ "${SCOUT_URLS:-1}" == "1" ]]; then
+    PHASE_BEGIN "URL Discovery"
+    INFO "Collecting URLs (gau, waybackurls)..."
+    COLLECT_URLS
+    PHASE_END
+    # Passive triage of what was just collected: gf vuln-class buckets + unfurl
+    # params/hosts. Operates only on the archived URLs, so it stays on by default
+    # (SCOUT_ANALYZE=0 to skip).
+    if [[ "${SCOUT_ANALYZE:-1}" == "1" ]]; then
+      PHASE_BEGIN "URL Analysis"
+      INFO "Analyzing URLs (gf patterns, unfurl)..."
+      ANALYZE_URLS
+      PHASE_END
+    fi
+    echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+  else
+    INFO "Skipping URL collection (SCOUT_URLS=0)."
+  fi
+  if [[ "${SCOUT_JS:-1}" == "1" ]]; then
+    PHASE_BEGIN "JavaScript Discovery"
+    INFO "Collecting JS files (gau, waybackurls, katana, hakrawler)..."
+    COLLECT_JS
+    PHASE_END
+    # Fetch and mine the collected JS for endpoints + secrets (jsluice). Bounded
+    # and paced (see cmd/analyze_js); on by default, SCOUT_JS_ANALYZE=0 to skip.
+    if [[ "${SCOUT_JS_ANALYZE:-1}" == "1" ]]; then
+      PHASE_BEGIN "JavaScript Analysis"
+      INFO "Analyzing JS for endpoints & secrets (jsluice)..."
+      ANALYZE_JS
+      PHASE_END
+    fi
+    echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+  else
+    INFO "Skipping JS collection (SCOUT_JS=0)."
+  fi
+fi
+
+# ---------------- ACTIVE SCANNING (opt-in) ----------------
+# nuclei, ffuf and naabu send real traffic to the target, so whether they are in
+# scope is the operator's call per program — all OFF by default, each enabled
+# with an explicit env var. Safe mode (default) keeps them rate-limited and
+# non-destructive. They only ever touch what the pipeline already found and what
+# survived the out-of-scope exclusions.
+if [[ "${SCOUT_NUCLEI:-0}" == "1" ]]; then
+  PHASE_BEGIN "Vulnerability Scanning"
+  INFO "Running nuclei vulnerability scan (SCOUT_NUCLEI=1)..."
+  NUCLEI_SCAN
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# Subdomain takeover: dangling-record hijack detection (subzy, nuclei fallback).
+# ACTIVE (sends HTTP), so opt-in like the other target-touching stages. Reads
+# final_subdomains.out, which already had out-of-scope exclusions applied.
+if [[ "${SCOUT_TAKEOVER:-0}" == "1" ]]; then
+  PHASE_BEGIN "Subdomain Takeover"
+  INFO "Checking for subdomain takeovers (SCOUT_TAKEOVER=1)..."
+  export TAKEOVER_INPUT="$OUTPUT_DIR/final_subdomains.out"
+  TAKEOVER
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# Parameter discovery — builds the parameterized-URL corpus the XSS/OWASP stages
+# consume. Archived-param extraction is passive; arjun (hidden params) touches
+# the target, so the whole stage is opt-in. Runs before the injection stages so
+# PARAM_URLS is populated for them.
+if [[ "${SCOUT_PARAMS:-0}" == "1" ]]; then
+  PHASE_BEGIN "Parameter Discovery"
+  INFO "Discovering parameters (arjun + archived params) (SCOUT_PARAMS=1)..."
+  PARAM_DISCOVERY
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# XSS (dalfox). ACTIVE, opt-in.
+if [[ "${SCOUT_XSS:-0}" == "1" ]]; then
+  PHASE_BEGIN "XSS Scanning"
+  INFO "Scanning for XSS (dalfox) (SCOUT_XSS=1)..."
+  SCAN_XSS
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# OWASP Top-10 sweep: LFI/RFI, SQLi, open redirect, SSRF candidates + nuclei DAST.
+# ACTIVE and payload-bearing, opt-in.
+if [[ "${SCOUT_OWASP:-0}" == "1" ]]; then
+  PHASE_BEGIN "OWASP Vulnerability Testing"
+  INFO "Running OWASP Top-10 sweep (LFI/RFI/SQLi/redirect/SSRF + nuclei DAST) (SCOUT_OWASP=1)..."
+  SCAN_OWASP
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# Favicon-hash pivoting (httpx -favicon). Touches targets, opt-in.
+if [[ "${SCOUT_FAVICON:-0}" == "1" ]]; then
+  PHASE_BEGIN "Favicon Pivoting"
+  INFO "Pivoting on favicon hashes (SCOUT_FAVICON=1)..."
+  FAVICON
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+# GitHub dorking (gitdorks_go). OSINT against GitHub, needs GITHUB_TOKEN, opt-in.
+if [[ "${SCOUT_GITHUB_DORK:-0}" == "1" ]]; then
+  PHASE_BEGIN "GitHub Dorking"
+  INFO "Dorking GitHub for leaks (SCOUT_GITHUB_DORK=1)..."
+  GITHUB_DORK
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+if [[ "${SCOUT_FFUF:-0}" == "1" ]]; then
+  PHASE_BEGIN "Content Discovery"
+  INFO "Running content discovery (SCOUT_FFUF=1)..."
+  CONTENT_DISCOVERY
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+if [[ "${SCOUT_PORTSCAN:-0}" == "1" ]]; then
+  PHASE_BEGIN "Port & Service Scan"
+  INFO "Running port scan (SCOUT_PORTSCAN=1)..."
+  export PORTSCAN_INPUT="$OUTPUT_DIR/final_subdomains.out"
+  PORT_SCAN
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+if [[ "${SCOUT_SCREENSHOTS:-0}" == "1" ]]; then
+  PHASE_BEGIN "Screenshots"
+  INFO "Capturing screenshots (SCOUT_SCREENSHOTS=1)..."
+  SCREENSHOT
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+
+# ---------------- RUN SUMMARY ----------------
+# Always last: aggregate every artifact into SUMMARY.md and report.html. The
+# report reads the whole-run clock, so export the total seconds for it.
+NOW SCOUT_SCRIPT_END
+export SCOUT_TOTAL_SECONDS=$(( SCOUT_SCRIPT_END - SCOUT_SCRIPT_START ))
+PHASE_BEGIN "Reporting"
+REPORT
+PHASE_END
+
+echo -e "${BOLD}${GREEN}Scout run completed in $(HUMAN_TIME "$SCOUT_TOTAL_SECONDS").${RESET}"
+[[ -s "$OUTPUT_DIR/report.html" ]] && echo -e "${BOLD}Full HTML report:${RESET} $OUTPUT_DIR/report.html"
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"

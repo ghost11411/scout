@@ -3,24 +3,270 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- SUBDOMAIN COLLECTION ----------------
-# Each tool below hits an independent, unrelated data source, so they're
-# launched together and waited on once instead of running one at a time.
-# Previously this stage's wall-clock time was the SUM of every tool's
-# runtime; now it's roughly the slowest single tool's runtime.
+# Sources run ONE AT A TIME, in the order listed in TOOLS below.
+#
+# They were previously launched together with `&` and waited on in one go,
+# which made the stage as slow as its slowest tool rather than the sum of all
+# of them. Sequential is the deliberate choice now: the stage's wall clock is
+# the SUM again, but each source gets the machine's full network and memory to
+# itself, per-tool progress and timing are visible on screen, and a hanging
+# source is immediately identifiable. Since the tools no longer overlap, the
+# per-tool bounds matter more — see SCOUT_BBOT_TIMEOUT and SCOUT_AMASS_TIMEOUT.
 
-_SUBFINDER()     { "$BIN_DIR/subfinder" -d "$DOMAIN" -all -silent > "$DOMAIN_OUTPUT_DIR/subfinder.out" 2>/dev/null || true; }
-_ASSETFINDER()   { echo "$DOMAIN" | "$BIN_DIR/assetfinder" -subs-only 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/assetfinder.out" || true; }
-_FINDOMAIN()     { "$BIN_DIR/findomain" -t "$DOMAIN" --quiet > "$DOMAIN_OUTPUT_DIR/findomain.out" 2>/dev/null || true; }
-_SUBDOG()        { echo "$DOMAIN" | "$BIN_DIR/subdog" --silent 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/subdog.out" || true; }
-_XSUBFIND3R()    { "$BIN_DIR/xsubfind3r" -d "$DOMAIN" -s > "$DOMAIN_OUTPUT_DIR/xsubfind3r.out" 2>/dev/null || true; }
-_CERO()          { "$BIN_DIR/cero" -d "$DOMAIN" 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/cero.out" || true; }
-_SUBLIST3R()     { python3 "$BIN_DIR/sublist3r/sublist3r.py" -d "$DOMAIN" -o "$DOMAIN_OUTPUT_DIR/sublister.out" > /dev/null 2>&1 || true; }
-_SUBDOMINATOR()  { subdominator -all -d "$DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true; }
+# INPUT FORM: every enumeration source below takes a PLAIN apex domain, never
+# the "*.example.com" form the -wc/-wf flags accept, so they all get
+# BASE_DOMAIN (set in COLLECT_SUBDOMAINS) rather than DOMAIN. Measured against
+# hackerone.com, passing the star meant: assetfinder 0 results instead of 13,
+# subdog 0 instead of 571, findomain "Target is empty or invalid!", cero
+# opening a TLS connection to the literal host "*.hackerone.com", and crt.sh
+# answering HTTP 502. Only subfinder and xsubfind3r strip it themselves.
+_SUBFINDER()     { "$BIN_DIR/subfinder" -d "$BASE_DOMAIN" -all -silent > "$DOMAIN_OUTPUT_DIR/subfinder.out" 2>/dev/null || true; }
+_ASSETFINDER()   { echo "$BASE_DOMAIN" | "$BIN_DIR/assetfinder" -subs-only 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/assetfinder.out" || true; }
+_FINDOMAIN()     { "$BIN_DIR/findomain" -t "$BASE_DOMAIN" --quiet > "$DOMAIN_OUTPUT_DIR/findomain.out" 2>/dev/null || true; }
+_SUBDOG()        { echo "$BASE_DOMAIN" | "$BIN_DIR/subdog" --silent 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/subdog.out" || true; }
+_XSUBFIND3R()    { "$BIN_DIR/xsubfind3r" -d "$BASE_DOMAIN" -s > "$DOMAIN_OUTPUT_DIR/xsubfind3r.out" 2>/dev/null || true; }
+# cero takes its target POSITIONALLY. Its `-d` is a boolean ("output only
+# valid domain names", i.e. drop IPs and wildcard SANs) — not "-d <domain>".
+_CERO()          { "$BIN_DIR/cero" -d "$BASE_DOMAIN" 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/cero.out" || true; }
+_SUBLIST3R()     { python3 "$BIN_DIR/sublist3r/sublist3r.py" -d "$BASE_DOMAIN" -o "$DOMAIN_OUTPUT_DIR/sublister.out" > /dev/null 2>&1 || true; }
+_SUBDOMINATOR()  { subdominator -all -d "$BASE_DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true; }
 _CRTSH() {
-  curl -sk --max-time 30 "https://crt.sh/?q=$DOMAIN&output=json" |
+  # crt.sh returns every identity CONTAINING the domain, so the plain form
+  # already covers subdomains; "*.domain" and "%.domain" both 502 here.
+  #
+  # "containing" is literal: querying example.com also returns m.testexample.com
+  # (a different registration), CA names like "AS207960 Test Intermediate -
+  # example.com", and contact addresses like user@example.com. This was the one
+  # source with a hand-rolled parser and no scope check, and an out-of-scope
+  # host reaching the results is exactly what a recon tool must not do — so its
+  # output goes through _SUB_FILTER like every other source.
+  curl -sk --max-time 30 "https://crt.sh/?q=$BASE_DOMAIN&output=json" |
     tr ',' '\n' |
     awk -F'"' '/name_value/ {gsub(/\*\./, "", $4); gsub(/\\n/,"\n",$4); print $4}' |
-    sort -u > "$DOMAIN_OUTPUT_DIR/crt.out" || true
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/crt.out" || true
+}
+
+# ---------------- ADDITIONAL FREE SOURCES ----------------
+# Everything below needs no paid account. The two that do want a (free) token
+# — github-subdomains and chaos — detect its absence and write an empty file
+# rather than failing, so a run without tokens still works.
+#
+# They all take BASE_DOMAIN for the same reason the sources above do — see the
+# INPUT FORM note at the top of this file.
+#
+# _SUB_FILTER reads a raw response on stdin (JSON, HTML, CSV, amass's
+# "a.b.com (FQDN) --> ..." lines) and prints just the hostnames under
+# BASE_DOMAIN. `grep -oE` extracts matches from anywhere in the line, which is
+# what lets one filter serve every source below instead of one parser each.
+# It ends in `|| true` because grep exits 1 when a source returns no hits, and
+# with `pipefail` that would otherwise abort the wrapper.
+_SUB_FILTER() {
+  local ESC="${BASE_DOMAIN//./\\.}"
+  tr '[:upper:]' '[:lower:]' |
+    grep -oE "([a-z0-9_-]+\.)*${ESC}" |
+    sort -u || true
+}
+
+# --- passive: tools ---
+# amass in purely passive mode. -timeout bounds it in minutes; without it a
+# single domain can outlast the whole rest of the stage.
+_AMASS() {
+  "$BIN_DIR/amass" enum -passive -d "$BASE_DOMAIN" -nocolor -timeout "${SCOUT_AMASS_TIMEOUT:-10}" 2>/dev/null |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/amass.out" || true
+}
+
+# BBOT's subdomain-enum preset, restricted to passive modules (-rf passive) so
+# it doesn't start its own DNS brute force on top of ours. It writes into a
+# scan dir of its own; we lift subdomains.txt out of it. Wrapped in `timeout`
+# because bbot has no built-in overall time bound.
+_BBOT() {
+  local OUT="$DOMAIN_OUTPUT_DIR/bbot.out" SCAN_DIR="$DOMAIN_OUTPUT_DIR/.bbot"
+  : > "$OUT"
+  command -v bbot >/dev/null 2>&1 || return 0
+  timeout "${SCOUT_BBOT_TIMEOUT:-900}" bbot -t "$BASE_DOMAIN" -p subdomain-enum -rf passive \
+    -om subdomains -o "$SCAN_DIR" -n scan -y --silent > /dev/null 2>&1 || true
+  [[ -f "$SCAN_DIR/scan/subdomains.txt" ]] &&
+    _SUB_FILTER < "$SCAN_DIR/scan/subdomains.txt" > "$OUT"
+  return 0
+}
+
+# Subdomains mentioned in public GitHub code/commits. Needs a free personal
+# access token (any scope) in GITHUB_TOKEN; skipped silently without one.
+_GITHUB_SUBS() {
+  : > "$DOMAIN_OUTPUT_DIR/github.out"
+  [[ -n "${GITHUB_TOKEN:-}" ]] || return 0
+  "$BIN_DIR/github-subdomains" -d "$BASE_DOMAIN" -t "$GITHUB_TOKEN" -raw 2>/dev/null |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/github.out" || true
+}
+
+# ProjectDiscovery Chaos dataset. Free for researchers; key comes from
+# PDCP_API_KEY (or the older CHAOS_KEY). Skipped silently without one.
+_CHAOS() {
+  : > "$DOMAIN_OUTPUT_DIR/chaos.out"
+  local KEY="${PDCP_API_KEY:-${CHAOS_KEY:-}}"
+  [[ -n "$KEY" ]] || return 0
+  "$BIN_DIR/chaos" -d "$BASE_DOMAIN" -key "$KEY" -silent -duc 2>/dev/null |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/chaos.out" || true
+}
+
+# Hostnames seen in archived URLs (Wayback / Common Crawl / OTX). gau is
+# already installed for the JS/URL stages; --subs makes it report subdomains
+# of the target rather than only the exact host.
+_GAU_SUBS() {
+  echo "$BASE_DOMAIN" | "$BIN_DIR/gau" --subs --threads 5 --timeout 30 2>/dev/null |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/gau.out" || true
+}
+
+# --- passive: free web APIs (no key, no account) ---
+_RAPIDDNS() {
+  curl -sk --max-time 45 "https://rapiddns.io/subdomain/${BASE_DOMAIN}?full=1" |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/rapiddns.out" || true
+}
+
+# Cert Transparency via Cert Spotter — a second CT view that regularly returns
+# names crt.sh misses (and answers when crt.sh is down, which is often).
+_CERTSPOTTER() {
+  curl -sk --max-time 45 \
+    "https://api.certspotter.com/v1/issuances?domain=${BASE_DOMAIN}&include_subdomains=true&expand=dns_names" |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/certspotter.out" || true
+}
+
+_HACKERTARGET() {
+  curl -sk --max-time 30 "https://api.hackertarget.com/hostsearch/?q=${BASE_DOMAIN}" |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/hackertarget.out" || true
+}
+
+_SUBDOMAINCENTER() {
+  curl -sk --max-time 60 "https://api.subdomain.center/?domain=${BASE_DOMAIN}" |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/subdomaincenter.out" || true
+}
+
+# urlscan.io's public scan index: hostnames of pages other people scanned.
+_URLSCAN() {
+  curl -sk --max-time 45 "https://urlscan.io/api/v1/search/?q=page.domain%3A${BASE_DOMAIN}&size=1000" |
+    _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/urlscan.out" || true
+}
+
+# --- active: DNS brute force ---
+# The only stage-1 source that talks to the target's DNS instead of a third
+# party. Finds hosts that were never published anywhere public, which is
+# exactly what passive sources structurally cannot do. Set SCOUT_BRUTE=0 to
+# skip it. Wildcard filtering is left ON here (unlike collect_live) so a
+# catch-all "*.domain" record doesn't turn the whole wordlist into "results".
+#
+# dnsx, not puredns: puredns is a front-end for the massdns binary, which this
+# project no longer builds or ships.
+_DNSX_BRUTE() {
+  local OUT="$DOMAIN_OUTPUT_DIR/dnsx_brute.out"
+  : > "$OUT"
+  [[ "${SCOUT_BRUTE:-1}" == "1" ]] || return 0
+  local WL="${SCOUT_DNS_WORDLIST:-$WORDLISTS_DIR/dns_subdomains.txt}"
+  [[ -s "$WL" ]] || return 0
+  HAVE_TOOL dnsx || return 0
+  # The wordlist supplies LABELS that dnsx prefixes to the domain, so a line
+  # containing "*" would synthesize "*.example.com" candidates and put a star
+  # into the resolver from the one direction the host-list gate never sees.
+  # Wordlists are third-party downloads, so filter rather than trust.
+  if grep -q '\*' "$WL" 2>/dev/null; then
+    local CLEAN_WL="$DOMAIN_OUTPUT_DIR/.brute_wordlist.txt"
+    grep -v '\*' "$WL" > "$CLEAN_WL" 2>/dev/null || true
+    WARN "Brute-force wordlist contained '*' entries; using a filtered copy."
+    WL="$CLEAN_WL"
+  fi
+  # -wd turns on wildcard filtering for this domain: without it a catch-all
+  # record answers every candidate and the whole wordlist comes back as "found".
+  local DNSX_BIN; DNSX_BIN="$(TOOL_PATH dnsx || true)"
+  local RESOLVERS="${RESOLVERS_FILE:-$WORDLISTS_DIR/resolvers.txt}"
+  if [[ -s "$RESOLVERS" ]]; then
+    "$DNSX_BIN" -d "$BASE_DOMAIN" -w "$WL" -wd "$BASE_DOMAIN" \
+      -r "$RESOLVERS" -silent -o "$OUT" > /dev/null 2>&1 || true
+  else
+    "$DNSX_BIN" -d "$BASE_DOMAIN" -w "$WL" -wd "$BASE_DOMAIN" \
+      -silent -o "$OUT" > /dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+# --- active: permutations (runs after stage 1, needs its results as seed) ---
+# alterx mutates the names already found ("api" -> api-dev, api2, api-staging,
+# ...) and dnsx keeps the ones that actually resolve. Runs last because its
+# input is every other source's output. Set SCOUT_PERMUTE=0 to skip.
+_PERMUTE() {
+  local SEED="$1" OUT="$DOMAIN_OUTPUT_DIR/permutations.out" WORDS DNSX_BIN
+  : > "$OUT"
+  [[ "${SCOUT_PERMUTE:-1}" == "1" ]] || return 0
+  [[ -s "$SEED" && -x "$BIN_DIR/alterx" ]] || return 0
+  HAVE_TOOL dnsx || return 0
+  DNSX_BIN="$(TOOL_PATH dnsx || true)"
+
+  WORDS="$DOMAIN_OUTPUT_DIR/.alterx_candidates.txt"
+  # -enrich derives the wordlist from the target's own naming style; -limit
+  # caps the candidate list, which alterx will otherwise happily blow up into
+  # millions of names for a large seed.
+  "$BIN_DIR/alterx" -l "$SEED" -enrich -limit "${SCOUT_PERMUTE_LIMIT:-50000}" -silent \
+    > "$WORDS" 2>/dev/null || true
+  # alterx output is generated, not curated: gate it like any other list before
+  # it becomes a resolver's input.
+  PREP_LIST "$WORDS" "Permutation candidates"
+  [[ -s "$WORDS" ]] || { rm -f "$WORDS"; return 0; }
+
+  START_SPINNER "Resolving $(COUNT_LINES "$WORDS") permutations for $BASE_DOMAIN"
+  # -wd for the same reason as the brute-force stage: these are guessed names,
+  # so a catch-all record would "confirm" all of them.
+  local RESOLVERS="${RESOLVERS_FILE:-$WORDLISTS_DIR/resolvers.txt}"
+  if [[ -s "$RESOLVERS" ]]; then
+    "$DNSX_BIN" -l "$WORDS" -wd "$BASE_DOMAIN" -r "$RESOLVERS" \
+      -silent -o "$OUT" > /dev/null 2>&1 || true
+  else
+    "$DNSX_BIN" -l "$WORDS" -wd "$BASE_DOMAIN" -silent -o "$OUT" > /dev/null 2>&1 || true
+  fi
+  STOP_SPINNER
+  rm -f "$WORDS"
+  local PCOUNT; PCOUNT=$(COUNT_LINES "$OUT")
+  OK "permutations resolved: $PCOUNT subdomains"
+  REC_TOOL "alterx+dnsx (permute)" "${ELAPSED:-0}" "$PCOUNT" \
+    "alterx -enrich -limit ${SCOUT_PERMUTE_LIMIT:-50000} | dnsx -wd $BASE_DOMAIN"
+  return 0
+}
+
+# Merge every per-tool *.out in DOMAIN_OUTPUT_DIR into one deduped file.
+#
+# `awk 1` rather than `cat`: cat glues the last host of a file that ends
+# without a newline onto the first host of the next one, silently inventing a
+# junk name and losing two real ones. awk emits a newline per record either way.
+#
+# NORMALIZE_HOSTS | VALID_HOSTS is the same gate the input lists go through
+# (cmd/lib), so "API.Example.com", "api.example.com." and "*.api.example.com"
+# collapse to one entry instead of four surviving `sort -u` as separate
+# "subdomains", and anything that isn't a hostname (banner lines, stray
+# punctuation, a "*" a source invented) is dropped here rather than at the
+# resolver. `sort -u` and not DEDUPE: this set is large and produced by 20
+# sources, so alphabetical order is both stable and easier to diff.
+#
+# The last awk enforces SCOPE: keep only BASE_DOMAIN itself and hosts ending in
+# ".BASE_DOMAIN". Sources do return other people's domains — crt.sh matches its
+# query as a substring (querying example.com yields m.testexample.com), and any
+# cert-derived source can hand back every SAN on a shared certificate. Letting
+# those through would put an out-of-scope host into DNS resolution and into
+# final_subdomains.out, which for a bug bounty tool is the one result you must
+# never produce. They are written to out_of_scope.txt rather than dropped, so
+# nothing is lost silently and related-domain leads are still reviewable — and
+# that filename does not end in .out, so it cannot re-enter this merge.
+_MERGE_OUTS() {
+  local DEST="$1" OOS="$DOMAIN_OUTPUT_DIR/out_of_scope.txt"
+  awk 1 "$DOMAIN_OUTPUT_DIR"/*.out 2>/dev/null |
+    NORMALIZE_HOSTS | VALID_HOSTS |
+    awk -v b="$BASE_DOMAIN" -v oos="${OOS}.tmp" '
+      { n = length($0); m = length(b)
+        if ($0 == b || (n > m && substr($0, n - m) == "." b)) print
+        else print > oos }' |
+    sort -u > "$DEST" || true
+  if [[ -s "${OOS}.tmp" ]]; then
+    sort -u "${OOS}.tmp" > "$OOS"
+    WARN "$(COUNT_LINES "$OOS") host(s) outside $BASE_DOMAIN excluded from results -> $OOS"
+  fi
+  rm -f "${OOS}.tmp"
+  return 0
 }
 
 COLLECT_SUBDOMAINS(){
@@ -31,31 +277,129 @@ COLLECT_SUBDOMAINS(){
     [subfinder]=_SUBFINDER   [assetfinder]=_ASSETFINDER   [findomain]=_FINDOMAIN
     [subdog]=_SUBDOG         [xsubfind3r]=_XSUBFIND3R     [cero]=_CERO
     [crt]=_CRTSH             [sublister]=_SUBLIST3R       [subdominator]=_SUBDOMINATOR
+    [amass]=_AMASS           [bbot]=_BBOT                 [github]=_GITHUB_SUBS
+    [chaos]=_CHAOS           [gau]=_GAU_SUBS              [rapiddns]=_RAPIDDNS
+    [certspotter]=_CERTSPOTTER  [hackertarget]=_HACKERTARGET
+    [subdomaincenter]=_SUBDOMAINCENTER  [urlscan]=_URLSCAN
+    [dnsx_brute]=_DNSX_BRUTE
   )
-  local TOOLS=(subfinder assetfinder findomain subdog xsubfind3r cero crt sublister subdominator)
-  local PIDS=() T PID COUNT
+  local TOOLS=(subfinder assetfinder findomain subdog xsubfind3r cero crt sublister subdominator
+               amass bbot github chaos gau rapiddns certspotter hackertarget subdomaincenter
+               urlscan dnsx_brute)
+  # What each source needs to be able to run. "file:" entries are checked as a
+  # path (sublist3r is a cloned repo, not a binary). Without this a missing
+  # tool was indistinguishable from a tool that found nothing: both printed
+  # "found: 0 subdomains".
+  local -A NEEDS=(
+    [subfinder]=subfinder    [assetfinder]=assetfinder  [findomain]=findomain
+    [subdog]=subdog          [xsubfind3r]=xsubfind3r    [cero]=cero
+    [crt]=curl               [subdominator]=subdominator
+    [sublister]="file:$BIN_DIR/sublist3r/sublist3r.py"
+    [amass]=amass            [bbot]=bbot                [github]=github-subdomains
+    [chaos]=chaos            [gau]=gau                  [rapiddns]=curl
+    [certspotter]=curl       [hackertarget]=curl        [subdomaincenter]=curl
+    [urlscan]=curl           [dnsx_brute]=dnsx
+  )
+  local RUNNABLE=() RAN=() SKIPPED=() T COUNT REQ
+
+  # scout already hands us a star-free, validated target. Running it through
+  # the same gate again is one cheap call that makes this stage safe to call
+  # directly, and keeps the star-stripping rules in exactly one place
+  # (PREP_TARGET in cmd/lib). See the INPUT FORM note at the top of this file.
+  local BASE_DOMAIN
+  if ! BASE_DOMAIN=$(PREP_TARGET "$DOMAIN"); then
+    WARN "Skipping '$DOMAIN': not a usable domain."
+    return 0
+  fi
+
+  # The apex itself is part of a "*.example.com" scope, but whether any tool
+  # reports it is luck. Seeding it here means it always reaches the merge, and
+  # from there the resolver.
+  printf '%s\n' "$BASE_DOMAIN" > "$DOMAIN_OUTPUT_DIR/target.out"
+
+  # Human-readable command line per source, for the report's "tools & commands"
+  # table. Kept alongside RUNNERS so the two don't drift; interpolates the real
+  # domain so the report shows exactly what ran.
+  local -A CMDS=(
+    [subfinder]="subfinder -d $BASE_DOMAIN -all -silent"
+    [assetfinder]="assetfinder -subs-only $BASE_DOMAIN"
+    [findomain]="findomain -t $BASE_DOMAIN --quiet"
+    [subdog]="subdog --silent (<<< $BASE_DOMAIN)"
+    [xsubfind3r]="xsubfind3r -d $BASE_DOMAIN -s"
+    [cero]="cero -d $BASE_DOMAIN"
+    [crt]="curl -sk 'https://crt.sh/?q=$BASE_DOMAIN&output=json' | scope-filter"
+    [sublister]="sublist3r.py -d $BASE_DOMAIN"
+    [subdominator]="subdominator -all -d $BASE_DOMAIN -s"
+    [amass]="amass enum -passive -d $BASE_DOMAIN -timeout ${SCOUT_AMASS_TIMEOUT:-10}"
+    [bbot]="bbot -t $BASE_DOMAIN -p subdomain-enum -rf passive"
+    [github]="github-subdomains -d $BASE_DOMAIN -t \$GITHUB_TOKEN"
+    [chaos]="chaos -d $BASE_DOMAIN -key \$PDCP_API_KEY -silent"
+    [gau]="gau --subs $BASE_DOMAIN | scope-filter"
+    [rapiddns]="curl -sk 'https://rapiddns.io/subdomain/$BASE_DOMAIN?full=1'"
+    [certspotter]="curl -sk 'https://api.certspotter.com/v1/issuances?domain=$BASE_DOMAIN&...'"
+    [hackertarget]="curl -sk 'https://api.hackertarget.com/hostsearch/?q=$BASE_DOMAIN'"
+    [subdomaincenter]="curl -sk 'https://api.subdomain.center/?domain=$BASE_DOMAIN'"
+    [urlscan]="curl -sk 'https://urlscan.io/api/v1/search/?q=page.domain:$BASE_DOMAIN'"
+    [dnsx_brute]="dnsx -d $BASE_DOMAIN -w dns_subdomains.txt -wd $BASE_DOMAIN"
+  )
 
   for T in "${TOOLS[@]}"; do
-    "${RUNNERS[$T]}" &
-    PIDS+=("$!")
+    REQ="${NEEDS[$T]}"
+    if [[ "$REQ" == file:* ]]; then
+      [[ -f "${REQ#file:}" ]] || { SKIPPED+=("$T (not installed)"); continue; }
+    else
+      HAVE_TOOL "$REQ" || { SKIPPED+=("$T (${REQ} not installed)"); continue; }
+    fi
+    # Installed but keyless: say so, instead of reporting "found: 0".
+    if [[ "$T" == github && -z "${GITHUB_TOKEN:-}" ]]; then
+      SKIPPED+=("github (no GITHUB_TOKEN)"); continue
+    fi
+    if [[ "$T" == chaos && -z "${PDCP_API_KEY:-${CHAOS_KEY:-}}" ]]; then
+      SKIPPED+=("chaos (no PDCP_API_KEY)"); continue
+    fi
+    if [[ "$T" == dnsx_brute && "${SCOUT_BRUTE:-1}" != "1" ]]; then
+      SKIPPED+=("dnsx_brute (SCOUT_BRUTE=0)"); continue
+    fi
+    RUNNABLE+=("$T")
   done
 
-  START_SPINNER "Running ${#TOOLS[@]} subdomain enumeration tools in parallel on $DOMAIN"
-  for PID in "${PIDS[@]}"; do
-    wait "$PID" || true
+  # One tool at a time. Each gets its own spinner, so the line on screen names
+  # the source actually running and its elapsed time, and a source that hangs
+  # is obvious instead of hidden behind a single "running 20 tools" spinner.
+  #
+  # `|| true` on the call is required, not decoration: when these ran with `&`
+  # the `wait ... || true` absorbed a non-zero exit. Called directly, a wrapper
+  # that returns non-zero would abort the whole run under `set -e`.
+  local IDX=0
+  for T in "${RUNNABLE[@]}"; do
+    IDX=$((IDX+1))
+    START_SPINNER "[$IDX/${#RUNNABLE[@]}] $T on $BASE_DOMAIN"
+    # Run with the per-domain output dir as CWD. Some tools write state files
+    # into the working directory whether you want them or not (subdominator
+    # drops a `resume.cfg`), and without this they land wherever scout was
+    # started from — including a git checkout. Every path these wrappers use is
+    # absolute, so the subshell costs nothing.
+    ( cd "$DOMAIN_OUTPUT_DIR" && "${RUNNERS[$T]}" ) || true
+    STOP_SPINNER
+    COUNT=$(COUNT_LINES "$DOMAIN_OUTPUT_DIR/${T}.out")
+    OK "$T found: $COUNT subdomains (${ELAPSED}s)"
+    REC_TOOL "$T" "${ELAPSED:-0}" "$COUNT" "${CMDS[$T]:-$T $BASE_DOMAIN}"
+    RAN+=("$T")
   done
-  STOP_SPINNER
+  (( ${#SKIPPED[@]} > 0 )) && WARN "Skipped: ${SKIPPED[*]}"
 
-  for T in "${TOOLS[@]}"; do
-    OK "$T found: $(COUNT_LINES "$DOMAIN_OUTPUT_DIR/${T}.out") subdomains"
-  done
-
-  # after all tools finished, combine into a single deduped file.
-  # One `cat` over the glob instead of a fork per file, and one pass into
-  # sort instead of writing the concatenation out and re-sorting it in place.
-  START_SPINNER "Combining all subdomain results"
+  # Permutations need every other source's results as their seed, so they run
+  # after the enumeration phase. The seed is an interim combine;
+  # permutations.out then joins the final combine below via the *.out glob, so
+  # the seed file itself is deliberately NOT named *.out.
   ALL_SUBS_FILE="$DOMAIN_OUTPUT_DIR/all_subdomains.txt"
-  cat "$DOMAIN_OUTPUT_DIR"/*.out 2>/dev/null | sort -u > "$ALL_SUBS_FILE" || true
+  _MERGE_OUTS "$ALL_SUBS_FILE"
+  _PERMUTE "$ALL_SUBS_FILE"
+
+  # after all tools finished, combine into a single deduped file. Re-run rather
+  # than append: permutations.out is now on disk and the glob picks it up.
+  START_SPINNER "Combining all subdomain results"
+  _MERGE_OUTS "$ALL_SUBS_FILE"
   STOP_SPINNER
   COUNT=$(COUNT_LINES "$ALL_SUBS_FILE")
   INFO "Subdomains found for $DOMAIN: $COUNT subdomains"

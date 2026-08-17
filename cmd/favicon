@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- FAVICON-HASH PIVOTING (httpx -favicon) ----------------
+# A favicon's mmh3 hash is a fingerprint: the same hash across the internet
+# usually means the same app/framework/origin, so a hash pulled from a target
+# is a Shodan/Censys pivot to related and origin-behind-CDN hosts. This is the
+# `http.favicon.hash:` trick from the Notion notes, done with httpx's built-in
+# -favicon (no extra dependency, no MurMurHash clone needed).
+#
+# Touches the target (one GET of /favicon.ico per host), so opt-in via
+# SCOUT_FAVICON=1. Output: favicon/favicon_hashes.txt (host -> hash) and
+# favicon/shodan_queries.txt (ready-to-paste pivot queries).
+FAVICON(){
+  local IN="${FAVICON_INPUT:-${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}}"
+  local FDIR="$OUTPUT_DIR/favicon"; mkdir -p "$FDIR"
+  local HASHES="$FDIR/favicon_hashes.txt" QUERIES="$FDIR/shodan_queries.txt"
+  : > "$HASHES"; : > "$QUERIES"
+
+  if [[ ! -s "$IN" ]]; then
+    WARN "No live hosts for favicon pivoting."
+    return 0
+  fi
+  local HX; HX="$(TOOL_PATH httpx || true)"
+  if [[ -z "$HX" ]]; then
+    WARN "httpx not installed — skipping favicon pivoting (run 'scout install --update')."
+    return 0
+  fi
+  local UA="${SCOUT_UA:-scout-recon}" RL="${SCOUT_HTTPX_RATELIMIT:-150}"
+  local RAW="$FDIR/.favicon.jsonl.$$"
+
+  START_SPINNER "Hashing favicons across $(COUNT_LINES "$IN") host(s)"
+  "$HX" -l "$IN" -favicon -json -silent -no-color -H "User-Agent: $UA" \
+    -rate-limit "$RL" -timeout 10 -o "$RAW" > /dev/null 2>&1 || true
+  STOP_SPINNER
+
+  if [[ -s "$RAW" ]]; then
+    if HAVE_TOOL jq; then
+      jq -r 'select(.favicon != null) | "\(.url)\t\(.favicon)"' "$RAW" 2>/dev/null | sort -u > "$HASHES" || true
+      jq -r '.favicon // empty' "$RAW" 2>/dev/null | sort -u |
+        while IFS= read -r h; do [[ -n "$h" ]] && printf 'http.favicon.hash:%s\n' "$h"; done > "$QUERIES" || true
+    else
+      # Fallback: httpx text output shape is "url [hash]"; harvest the bracketed hash.
+      grep -oE 'https?://[^ ]+ \[-?[0-9]+\]' "$RAW" 2>/dev/null | sort -u > "$HASHES" || true
+    fi
+  fi
+  rm -f "$RAW"
+
+  local N; N=$(COUNT_LINES "$HASHES")
+  OK "Favicon hashes: $N -> $HASHES"
+  [[ -s "$QUERIES" ]] && INFO "Shodan pivot queries -> $QUERIES ($(COUNT_LINES "$QUERIES") unique hash(es))"
+  REC_TOOL "httpx (favicon)" "${ELAPSED:-0}" "$N" "httpx -l live_hosts.txt -favicon -json"
+  return 0
+}

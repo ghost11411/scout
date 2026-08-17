@@ -2,12 +2,16 @@
 set -euo pipefail
 IFS=$' \t\n'
 
-# ---------------- LIVE HOSTS (puredns) ----------------
+# ---------------- LIVE HOSTS (dnsx) ----------------
+# Was puredns. puredns is only a front-end for the massdns binary (it takes
+# `-b <path-to-massdns>` and cannot run without it), so dropping massdns
+# dropped puredns with it. dnsx does the same job, is pure Go with no external
+# binary to build, and is already installed by cmd/installer.
 COLLECT_LIVE(){
   # Caller (scout) builds RESOLVE_INPUT = enumerated subdomains + plain
   # -dm/-df domains. Fall back to the enumerated set alone if unset.
   local ALL_SUBS_FILE="${RESOLVE_INPUT:-$OUTPUT_DIR/subdomains/combined_subdomains.txt}"
-  RESOLVED_OUT="${RESOLVED_OUT:-$OUTPUT_DIR/resolved/puredns_resolved.out}"
+  RESOLVED_OUT="${RESOLVED_OUT:-$OUTPUT_DIR/resolved/dnsx_resolved.out}"
   mkdir -p "$(dirname "$RESOLVED_OUT")"
 
   if [[ ! -s "$ALL_SUBS_FILE" ]]; then
@@ -15,14 +19,45 @@ COLLECT_LIVE(){
     return
   fi
 
-  START_SPINNER "Running PureDNS for Resolving live hosts"
-  "$BIN_DIR/puredns" resolve "$ALL_SUBS_FILE" -b "$BIN_DIR/massdns" -r "$WORDLISTS_DIR/resolvers.txt" -w "$RESOLVED_OUT" --skip-wildcard-filter -q > /dev/null 2>&1 || true
+  # This stage takes a caller-supplied path, so it validates its own input
+  # rather than assuming the caller ran the gate. Both calls are cheap and
+  # idempotent on an already-clean list.
+  PREP_LIST "$ALL_SUBS_FILE" "Resolver input"
+  ASSERT_NO_STAR "$ALL_SUBS_FILE" "Resolver input" || true
+  if [[ ! -s "$ALL_SUBS_FILE" ]]; then
+    ERR "Nothing left to resolve after validation"
+    return
+  fi
+
+  local DNSX_BIN
+  if ! DNSX_BIN="$(TOOL_PATH dnsx)" || [[ -z "$DNSX_BIN" ]]; then
+    ERR "Cannot resolve: dnsx is not installed — run 'scout install --update'."
+    return
+  fi
+
+  START_SPINNER "Resolving live hosts with dnsx"
+  # No -wd here: this stage resolves a curated list, and wildcard filtering
+  # would throw away real hosts that happen to sit under a catch-all record.
+  # The brute-force stage does filter, where the same record would otherwise
+  # turn the whole wordlist into "results".
+  #
+  # -r is optional for dnsx (it ships with built-in resolvers), unlike massdns
+  # which refused to start without a list — so the two branches, rather than an
+  # array that would be empty half the time.
+  local RESOLVERS="${RESOLVERS_FILE:-$WORDLISTS_DIR/resolvers.txt}"
+  if [[ -s "$RESOLVERS" ]]; then
+    "$DNSX_BIN" -l "$ALL_SUBS_FILE" -r "$RESOLVERS" \
+      -silent -o "$RESOLVED_OUT" > /dev/null 2>&1 || true
+  else
+    "$DNSX_BIN" -l "$ALL_SUBS_FILE" -silent -o "$RESOLVED_OUT" > /dev/null 2>&1 || true
+  fi
   STOP_SPINNER
 
-  # Count after stopping the spinner, and via COUNT_LINES so a puredns failure
+  # Count after stopping the spinner, and via COUNT_LINES so a dnsx failure
   # can't leak a wc error over the live spinner line.
   local LIVE_COUNT
   LIVE_COUNT=$(COUNT_LINES "$RESOLVED_OUT")
-  OK "PureDNS Resolved live hosts: $LIVE_COUNT"
+  OK "dnsx resolved live hosts: $LIVE_COUNT"
   INFO "Resolved live hosts -> $RESOLVED_OUT"
+  REC_TOOL "dnsx (resolve)" "${ELAPSED:-0}" "$LIVE_COUNT" "dnsx -l resolve_input.txt -r resolvers.txt -silent"
 }

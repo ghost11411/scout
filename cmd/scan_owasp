@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- OWASP TOP-10 ACTIVE TESTING ----------------
+# The broad injection/inclusion sweep, driven off the parameter corpus
+# (cmd/param_discovery) and the gf buckets (cmd/analyze_urls). Covers the
+# server-side OWASP classes that a parameter-fuzzing pass can find safely:
+#   * LFI  (A01/A05)  — path traversal to /etc/passwd, confirmed by response.
+#   * RFI             — remote-file-inclusion candidate params (flagged, not
+#                       auto-exploited; confirming RFI needs an attacker host).
+#   * SQLi (A03)      — error-based, single-quote probe matched against DB errors.
+#   * Open redirect   — canary in the Location header.
+#   * SSRF (A10)      — candidates flagged; blind SSRF needs the OOB collaborator
+#                       (interactsh) and is left to nuclei's SSRF templates.
+#   * Everything else — nuclei with its DAST/fuzzing templates and the OWASP tag
+#                       set (sqli, xss, ssrf, lfi, rce, redirect, injection),
+#                       plus exposures/CVEs/misconfig.
+#
+# ACTIVE and payload-bearing, so opt-in via SCOUT_OWASP=1. SCOUT_OWASP enabling
+# nuclei's DAST fuzzing is deliberate (that is the point of this stage); the
+# always-destructive classes `dos` and `intrusive` stay excluded even so. Each
+# check is bounded (SCOUT_OWASP_LIMIT URLs/class), paced, and sends SCOUT_UA.
+# Nothing here writes to the target — only GETs with crafted query values.
+
+# Merge gf bucket + parameter corpus for one class, keep only parameterized URLs.
+_OWASP_CANDS(){
+  local class="$1"
+  {
+    [[ -s "$OUTPUT_DIR/urls/gf/$class.txt" ]] && cat "$OUTPUT_DIR/urls/gf/$class.txt"
+    [[ -s "${PARAM_URLS:-$OUTPUT_DIR/params/param_urls.txt}" ]] && cat "${PARAM_URLS:-$OUTPUT_DIR/params/param_urls.txt}"
+  } 2>/dev/null | grep -E '\?[^[:space:]]*=' 2>/dev/null | sort -u || true
+}
+
+# Body-content probe: replace every param value with <payload>, fetch, keep URLs
+# whose RESPONSE matches <regex>. Used for LFI (root:...) and error-based SQLi.
+#   _OWASP_BODY_PROBE <class> <payload> <regex> <out> <label>
+_OWASP_BODY_PROBE(){
+  local class="$1" payload="$2" regex="$3" out="$4" label="$5"
+  : > "$out"
+  local QSR HX
+  QSR="$(TOOL_PATH qsreplace || true)"; HX="$(TOOL_PATH httpx || true)"
+  [[ -n "$QSR" && -n "$HX" ]] || { INFO "$label: needs qsreplace + httpx — skipped."; return 0; }
+  local cands="$OUTPUT_DIR/vulns/.cands_${class}.$$"
+  _OWASP_CANDS "$class" | head -n "${SCOUT_OWASP_LIMIT:-300}" > "$cands"
+  [[ -s "$cands" ]] || { rm -f "$cands"; INFO "$label: no candidate URLs."; return 0; }
+  local UA="${SCOUT_UA:-scout-recon}" RL="${SCOUT_OWASP_RATELIMIT:-100}"
+  "$QSR" "$payload" < "$cands" 2>/dev/null | sort -u |
+    "$HX" -silent -no-color -mr "$regex" -H "User-Agent: $UA" \
+      -rate-limit "$RL" -timeout 10 -o "$out" > /dev/null 2>&1 || true
+  rm -f "$cands"
+  local n; n=$(COUNT_LINES "$out")
+  (( n > 0 )) && OK "$label: $n confirmed -> $out" || INFO "$label: none confirmed."
+  return 0
+}
+
+# Open-redirect probe: inject a canary host, follow one hop, flag URLs whose
+# Location header points at the canary. curl loop (bounded) because it inspects
+# a response header, not the body.
+_OWASP_REDIRECT(){
+  local out="$OUTPUT_DIR/vulns/open_redirect.txt"; : > "$out"
+  local QSR; QSR="$(TOOL_PATH qsreplace || true)"
+  [[ -n "$QSR" ]] || { INFO "Open redirect: needs qsreplace — skipped."; return 0; }
+  local cands="$OUTPUT_DIR/vulns/.cands_redirect.$$"
+  _OWASP_CANDS "redirect" | head -n "${SCOUT_OWASP_LIMIT:-300}" > "$cands"
+  [[ -s "$cands" ]] || { rm -f "$cands"; INFO "Open redirect: no candidate URLs."; return 0; }
+  local UA="${SCOUT_UA:-scout-recon}" CANARY="https://scout-canary.example"
+  local url loc
+  while read -r url; do
+    [[ -n "$url" ]] || continue
+    # -sIL follows redirects; grep the Location chain for our canary host.
+    loc=$(curl -s -o /dev/null -A "$UA" --max-time 10 -w '%{redirect_url}' "$url" 2>/dev/null) || true
+    case "$loc" in *scout-canary.example*) printf '%s\n' "$url" >> "$out";; esac
+  done < <("$QSR" "$CANARY" < "$cands" 2>/dev/null | sort -u)
+  rm -f "$cands"
+  local n; n=$(COUNT_LINES "$out")
+  (( n > 0 )) && OK "Open redirect: $n confirmed -> $out" || INFO "Open redirect: none confirmed."
+  return 0
+}
+
+# RFI / SSRF candidate flagging: params whose names commonly carry a URL/path.
+# Confirming these safely needs an attacker-controlled host / OOB collaborator,
+# so we surface the candidates for manual/nuclei follow-up rather than exploit.
+_OWASP_CANDIDATES(){
+  local rfi="$OUTPUT_DIR/vulns/rfi_candidates.txt" ssrf="$OUTPUT_DIR/vulns/ssrf_candidates.txt"
+  : > "$rfi"; : > "$ssrf"
+  local corpus="${PARAM_URLS:-$OUTPUT_DIR/params/param_urls.txt}"
+  {
+    [[ -s "$corpus" ]] && cat "$corpus"
+    [[ -s "$OUTPUT_DIR/urls/gf/lfi.txt" ]] && cat "$OUTPUT_DIR/urls/gf/lfi.txt"
+  } 2>/dev/null | grep -Ei '[?&](file|url|path|include|inc|page|doc|document|template|dir|load|src|source)=' \
+    | sort -u > "$rfi" || true
+  {
+    [[ -s "$OUTPUT_DIR/urls/gf/ssrf.txt" ]] && cat "$OUTPUT_DIR/urls/gf/ssrf.txt"
+    [[ -s "$corpus" ]] && grep -Ei '[?&](url|uri|host|domain|dest|redirect|target|callback|next|data|feed|site|out|to)=' "$corpus"
+  } 2>/dev/null | sort -u > "$ssrf" || true
+  INFO "RFI candidate params: $(COUNT_LINES "$rfi") ; SSRF candidate params: $(COUNT_LINES "$ssrf")"
+  return 0
+}
+
+# nuclei DAST + OWASP tag sweep over the live HTTP feed.
+_OWASP_NUCLEI(){
+  local out="$OUTPUT_DIR/vulns/owasp_nuclei.jsonl"; : > "$out"
+  local NB; NB="$(TOOL_PATH nuclei || true)"
+  [[ -n "$NB" ]] || { INFO "nuclei not installed — skipping OWASP template sweep."; return 0; }
+  local feed="${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}"
+  [[ -s "$feed" ]] || feed="$OUTPUT_DIR/final_subdomains.out"
+  [[ -s "$feed" ]] || { INFO "No live hosts for nuclei OWASP sweep."; return 0; }
+  local SEV="${SCOUT_OWASP_SEVERITY:-low,medium,high,critical}"
+  local RL="${SCOUT_NUCLEI_RATELIMIT:-150}" CONC="${SCOUT_NUCLEI_CONCURRENCY:-25}"
+  local TAGS="${SCOUT_OWASP_TAGS:-sqli,xss,ssrf,lfi,rce,redirect,injection,exposure,misconfig,cve}"
+  local UA_ARG=(); [[ -n "${SCOUT_UA:-}" ]] && UA_ARG=(-header "User-Agent: ${SCOUT_UA}")
+  # -dast turns on the fuzzing templates (the active OWASP checks). dos/intrusive
+  # stay excluded even here — SCOUT_OWASP means "test OWASP", not "harm target".
+  START_SPINNER "nuclei OWASP DAST sweep over $(COUNT_LINES "$feed") host(s)"
+  "$NB" -l "$feed" -dast -tags "$TAGS" -severity "$SEV" \
+    -rate-limit "$RL" -concurrency "$CONC" -exclude-tags dos,intrusive \
+    "${UA_ARG[@]}" -no-color -silent -jsonl -o "$out" > /dev/null 2>&1 || true
+  STOP_SPINNER
+  local n; n=$(COUNT_LINES "$out")
+  (( n > 0 )) && OK "nuclei OWASP findings: $n -> $out" || INFO "nuclei OWASP: no findings."
+  REC_TOOL "nuclei (dast/owasp)" "${ELAPSED:-0}" "$n" \
+    "nuclei -l live_hosts.txt -dast -tags $TAGS -severity $SEV -exclude-tags dos,intrusive"
+  return 0
+}
+
+SCAN_OWASP(){
+  mkdir -p "$OUTPUT_DIR/vulns"
+  local _OW_START; NOW _OW_START
+
+  # Heuristic parameter checks (need the corpus and/or gf buckets).
+  _OWASP_BODY_PROBE "lfi"  "/etc/passwd" 'root:.*:0:0:' "$OUTPUT_DIR/vulns/lfi.txt"  "LFI (/etc/passwd)"
+  _OWASP_BODY_PROBE "sqli" "'" 'SQL syntax|mysql_fetch|valid MySQL result|ORA-[0-9]{4,}|SQLSTATE|PostgreSQL.*ERROR|Unclosed quotation mark|SQLite/JDBCDriver' "$OUTPUT_DIR/vulns/sqli.txt" "SQLi (error-based)"
+  _OWASP_REDIRECT
+  _OWASP_CANDIDATES
+
+  local _OW_END; NOW _OW_END
+  # Record the heuristic block as one row; nuclei records itself separately.
+  local hcount=0 f
+  for f in lfi.txt sqli.txt open_redirect.txt; do
+    hcount=$(( hcount + $(COUNT_LINES "$OUTPUT_DIR/vulns/$f") ))
+  done
+  REC_TOOL "qsreplace+httpx (lfi/sqli/redirect)" "$(( _OW_END - _OW_START ))" "$hcount" \
+    "gf {lfi,sqli,redirect} + param corpus | qsreplace <payload> | httpx -mr <signature>"
+
+  # Broad DAST/template sweep.
+  _OWASP_NUCLEI
+  return 0
+}

@@ -53,14 +53,300 @@ fi
 
 # ---------------- SMALL UTILITIES ----------------
 # Line count that is safe on a missing or empty file: prints 0 instead of
-# letting `wc` leak "No such file or directory" over a live spinner line.
+# letting an error leak over a live spinner line.
+#
+# `awk END{print NR}`, not `wc -l`: wc counts NEWLINES, so a tool whose output
+# ends without one is reported one host short — a single-line file reads as
+# "found: 0 subdomains" while its host is really there and does reach the
+# merge (which uses `awk 1` for the same reason). sublist3r's `-o` file is
+# written by Python and is exactly that case.
 COUNT_LINES(){
   local N
-  if [[ -s "$1" ]] && N=$(wc -l < "$1" 2>/dev/null); then
+  if [[ -s "$1" ]] && N=$(awk 'END{print NR}' "$1" 2>/dev/null); then
     printf '%s' "${N//[[:space:]]/}"
   else
     printf '0'
   fi
+}
+
+# Concatenate files to stdout, guaranteeing a newline between them.
+#
+# `cat a b` glues a's last line onto b's first when a ends without a newline —
+# it invents one junk hostname and loses two real ones, which is invisible
+# until something downstream fails to resolve. `awk 1` normalizes that, but
+# awk ABORTS on the first unreadable file and never reads the later ones (cat
+# just warns and continues), so a missing file here would silently drop every
+# file after it. Hence the existence filter.
+CAT_LINES(){
+  local F ARGS=()
+  for F in "$@"; do
+    [[ -f "$F" && -r "$F" ]] && ARGS+=("$F")
+  done
+  (( ${#ARGS[@]} > 0 )) || return 0
+  awk 1 "${ARGS[@]}" 2>/dev/null || true
+}
+
+# ---------------- TELEMETRY (timings, phases, commands) ----------------
+# One append-only record per tool invocation and one per phase, written to
+# TSV files under $OUTPUT_DIR/.telemetry. cmd/report reads these back to build
+# the HTML report's "phases -> tools -> commands", per-tool timing table, and
+# total-runtime figure. Everything here is best-effort and MUST NOT abort the
+# run under `set -e`: every write is guarded and every function returns 0.
+#
+# State lives in plain globals because `scout` sources every stage into one
+# shell, so PHASE_BEGIN in scout and REC_TOOL inside a sourced stage share the
+# same SCOUT_PHASE / _PHASE_START. scout sets SCOUT_TELEMETRY, SCOUT_PHASES_LOG
+# and SCOUT_SCRIPT_START (and exports them) once the output dir exists.
+
+# TELEMETRY_INIT — create the telemetry dir and truncate the logs. Called once
+# by scout after OUTPUT_DIR is known. No-op if telemetry paths are unset.
+TELEMETRY_INIT(){
+  [[ -n "${SCOUT_TELEMETRY:-}" ]] || return 0
+  mkdir -p "$(dirname "$SCOUT_TELEMETRY")" 2>/dev/null || true
+  : > "$SCOUT_TELEMETRY" 2>/dev/null || true
+  [[ -n "${SCOUT_PHASES_LOG:-}" ]] && : > "$SCOUT_PHASES_LOG" 2>/dev/null || true
+  return 0
+}
+
+# PHASE_BEGIN <human title> — mark the start of a pipeline phase. Sets
+# SCOUT_PHASE (which REC_TOOL stamps onto every tool row) and remembers the
+# start time for PHASE_END. Also emits a heading rule so the terminal output is
+# sectioned the same way the report is.
+PHASE_BEGIN(){
+  SCOUT_PHASE="${1:-misc}"
+  NOW _PHASE_START
+  return 0
+}
+
+# PHASE_END — close the current phase, recording its wall-clock seconds.
+PHASE_END(){
+  [[ -n "${SCOUT_PHASE:-}" ]] || return 0
+  local end el
+  NOW end
+  el=$(( end - ${_PHASE_START:-$end} ))
+  if [[ -n "${SCOUT_PHASES_LOG:-}" ]]; then
+    printf '%s\t%s\n' "$SCOUT_PHASE" "$el" >> "$SCOUT_PHASES_LOG" 2>/dev/null || true
+  fi
+  SCOUT_PHASE=""
+  return 0
+}
+
+# REC_TOOL <tool> <seconds> <count> <command...> — record one tool invocation
+# under the current phase. <seconds> is usually the $ELAPSED that STOP_SPINNER
+# already computed; <count> is how many items it produced (COUNT_LINES of its
+# output); the rest is the human-readable command line for the report. Multiple
+# rows for the same tool (e.g. one per wildcard) are expected — the report sums
+# them per phase+tool.
+REC_TOOL(){
+  [[ -n "${SCOUT_TELEMETRY:-}" ]] || return 0
+  local tool="${1:-tool}" secs="${2:-0}" count="${3:-0}"
+  shift 3 2>/dev/null || true
+  local cmd="$*"
+  # TSV fields must not contain tabs or newlines.
+  tool="${tool//$'\t'/ }"; tool="${tool//$'\n'/ }"
+  cmd="${cmd//$'\t'/ }";   cmd="${cmd//$'\n'/ }"
+  secs="${secs//[^0-9]/}"; [[ -n "$secs" ]] || secs=0
+  count="${count//[^0-9]/}"; [[ -n "$count" ]] || count=0
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "${SCOUT_PHASE:-misc}" "$tool" "$secs" "$count" "$cmd" \
+    >> "$SCOUT_TELEMETRY" 2>/dev/null || true
+  return 0
+}
+
+# HUMAN_TIME <seconds> — "0s" / "45s" / "3m 12s" / "1h 04m". Used by the report
+# and the end-of-run line so durations read the same everywhere.
+HUMAN_TIME(){
+  local s="${1:-0}"; s="${s//[^0-9]/}"; [[ -n "$s" ]] || s=0
+  local h=$(( s / 3600 )) m=$(( (s % 3600) / 60 )) sec=$(( s % 60 ))
+  if   (( h > 0 )); then printf '%dh %02dm' "$h" "$m"
+  elif (( m > 0 )); then printf '%dm %02ds' "$m" "$sec"
+  else                   printf '%ds' "$sec"
+  fi
+}
+
+# ---------------- HOST LIST PIPELINE ----------------
+# One canonical normalize -> dedupe -> validate chain, used by every stage.
+# Before this existed each stage cleaned its lists differently (or not at all),
+# which is how a "*.example.com" typed into -dm reached the resolver.
+#
+# Order matters: NORMALIZE_HOSTS first (VALID_HOSTS rejects anything it would
+# have fixed, e.g. uppercase), DEDUPE second (so it dedupes canonical forms,
+# not spellings), VALID_HOSTS last (so nothing it passes can be un-normalized).
+
+# stdin -> stdout. Canonicalize one host per line and drop what isn't one:
+# CRLF, surrounding whitespace, "#" comments, scheme, path/query/fragment,
+# :port, a trailing root dot, and ONE leading "*." (see below), lowercased.
+#
+# Exactly one leading "*." is stripped, deliberately. "*.example.com" is a
+# legal way to name a wildcard target, so it canonicalizes to its apex; but
+# "*.*.example.com" and "api.*.example.com" have no sane apex and must not be
+# silently turned into one, so they keep a "*" and VALID_HOSTS rejects them.
+NORMALIZE_HOSTS(){
+  awk '
+    { sub(/\r$/, "")                                  # CRLF line endings
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "") }
+    /^#/ || /^$/ { next }                             # comments, blank lines
+    { sub(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "")        # scheme://
+      sub(/[\/?#].*$/, "")                            # path, query, fragment
+      sub(/^[^@]*@/, "")                              # user:pass@
+      sub(/:[0-9]+$/, "")                             # :port
+      sub(/^\*\./, "")                                # ONE leading "*."
+      sub(/^\.+/, ""); sub(/\.+$/, "") }              # stray leading/root dots
+    length($0) { print tolower($0) }
+  '
+}
+
+# stdin -> stdout, order-preserving dedupe (keeps the first occurrence).
+# `sort -u` would also dedupe but reorders, and the input lists are supposed
+# to stay in the order the user supplied them.
+DEDUPE(){ awk '!seen[$0]++'; }
+
+# stdin -> stdout, keep only syntactically valid hostnames. A surviving "*"
+# cannot match this regex, which is what makes "no star reaches DNS" a
+# property of the pipeline rather than a check someone has to remember.
+VALID_HOSTS(){
+  awk '
+    length($0) > 253 { next }
+    $0 !~ /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/ { next }
+    { n = split($0, L, ".")
+      for (i = 1; i <= n; i++) if (length(L[i]) < 1 || length(L[i]) > 63) next
+      print }
+  '
+}
+
+# PREP_LIST <file> <label> — the gate every file-fed external tool goes
+# through. Rewrites <file> in place as normalized, deduped, validated, and
+# reports what it dropped so a silently shrinking list is visible.
+PREP_LIST(){
+  local FILE="$1" LABEL="${2:-list}" BEFORE AFTER TMP
+  [[ -f "$FILE" ]] || return 0
+  BEFORE=$(COUNT_LINES "$FILE")
+  TMP="${FILE}.prep.$$"
+  NORMALIZE_HOSTS < "$FILE" | DEDUPE | VALID_HOSTS > "$TMP" || true
+  mv -f "$TMP" "$FILE"
+  AFTER=$(COUNT_LINES "$FILE")
+  if (( BEFORE > AFTER )); then
+    INFO "$LABEL: $AFTER usable entries ($((BEFORE - AFTER)) dropped as duplicate/invalid)"
+  fi
+  return 0
+}
+
+# ASSERT_NO_STAR <file> <label> — last tripwire before a resolver. PREP_LIST
+# already makes this unreachable; it exists so that if some future edit routes
+# around the gate, the run says so loudly instead of asking DNS about a host
+# named "*". Offending lines are removed, so the caller can continue safely.
+ASSERT_NO_STAR(){
+  local FILE="$1" LABEL="${2:-list}" BAD TMP
+  [[ -f "$FILE" ]] || return 0
+  BAD=$(grep -c '\*' "$FILE" 2>/dev/null || true)
+  [[ -z "${BAD//[[:space:]]/}" ]] && BAD=0
+  (( BAD == 0 )) && return 0
+  ERR "$LABEL: $BAD entry/entries still contain '*' — removed before use:"
+  grep '\*' "$FILE" 2>/dev/null | head -n 5 >&2 || true
+  TMP="${FILE}.nostar.$$"
+  grep -v '\*' "$FILE" > "$TMP" 2>/dev/null || true
+  mv -f "$TMP" "$FILE"
+  return 1
+}
+
+# ---------------- SCOPE ENFORCEMENT ----------------
+# EXCLUDE_HOSTS <target-file> <exclusion-file> — the out-of-scope guard.
+# Removes from <target-file> every host that equals, or is a subdomain of, an
+# entry in <exclusion-file>. This is how a program's OOS list is honoured:
+# "*.example.com is in scope EXCEPT support.example.com" -> pass support.example.com
+# via -xf/-xc and it (and everything under it) never reaches probing or scanning.
+# Both files are assumed already normalized (lowercase, no scheme/port); scout
+# runs the exclusion list through PREP_LIST before calling this.
+#
+# The check walks parent domains: a.b.support.example.com is dropped because its
+# ancestor support.example.com is excluded. An exact-host exclusion therefore
+# also removes that host's whole subtree, which matches how programs mean it.
+EXCLUDE_HOSTS(){
+  local TARGET="$1" EXCL="$2" TMP BEFORE AFTER
+  [[ -f "$TARGET" ]] || return 0
+  [[ -n "${EXCL:-}" && -s "$EXCL" ]] || return 0
+  BEFORE=$(COUNT_LINES "$TARGET")
+  TMP="${TARGET}.excl.$$"
+  awk '
+    NR==FNR { if ($0 != "") e[$0]=1; next }
+    {
+      if ($0 in e) next            # exact match
+      s=$0; drop=0
+      while ((i=index(s, ".")) > 0) {
+        s=substr(s, i+1)           # strip leftmost label, test each ancestor
+        if (s in e) { drop=1; break }
+      }
+      if (!drop) print
+    }' "$EXCL" "$TARGET" > "$TMP" 2>/dev/null || cp -f "$TARGET" "$TMP"
+  mv -f "$TMP" "$TARGET"
+  AFTER=$(COUNT_LINES "$TARGET")
+  (( BEFORE > AFTER )) && WARN "Scope: excluded $((BEFORE - AFTER)) out-of-scope host(s) per exclusion list."
+  return 0
+}
+
+# EXCLUDE_URLS <target-url-file> <exclusion-host-file> — the URL-level companion
+# to EXCLUDE_HOSTS. Rewrites <target> in place, dropping every URL whose HOST is
+# an excluded host or a subdomain of one (same subtree walk as EXCLUDE_HOSTS).
+# Needed because all_urls.out / all_js_files.out are URLs, not host lists, yet
+# they feed the active injection/fetch stages — so an excluded subdomain reached
+# via an archived or crawled URL must be stripped here too.
+EXCLUDE_URLS(){
+  local TARGET="$1" EXCL="$2" TMP BEFORE AFTER
+  [[ -f "$TARGET" ]] || return 0
+  [[ -n "${EXCL:-}" && -s "$EXCL" ]] || return 0
+  BEFORE=$(COUNT_LINES "$TARGET")
+  TMP="${TARGET}.excl.$$"
+  awk '
+    NR==FNR { if ($0 != "") e[$0]=1; next }
+    {
+      h=$0
+      sub(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "", h)   # strip scheme://
+      sub(/[\/:?#].*$/, "", h)                       # strip path/port/query/frag
+      h=tolower(h)
+      if (h in e) next                               # exact host match
+      s=h; drop=0
+      while ((i=index(s, ".")) > 0) {
+        s=substr(s, i+1)                             # test each ancestor domain
+        if (s in e) { drop=1; break }
+      }
+      if (!drop) print
+    }' "$EXCL" "$TARGET" > "$TMP" 2>/dev/null || cp -f "$TARGET" "$TMP"
+  mv -f "$TMP" "$TARGET"
+  AFTER=$(COUNT_LINES "$TARGET")
+  (( BEFORE > AFTER )) && WARN "Scope: dropped $((BEFORE - AFTER)) URL(s) on out-of-scope host(s)."
+  return 0
+}
+
+# PREP_TARGET <string> — single-target form of the same rules. Prints the
+# canonical domain, or returns 1 when the argument has no usable domain in it
+# (bare "*", "a.*.b.com", "http://", ...). Callers use:
+#   if BASE=$(PREP_TARGET "$RAW"); then ... else WARN ...; fi
+PREP_TARGET(){
+  local T
+  T=$(printf '%s\n' "$1" | NORMALIZE_HOSTS | VALID_HOSTS | head -n 1) || true
+  [[ -n "$T" ]] || return 1
+  printf '%s' "$T"
+}
+
+# Is a tool available, either on PATH or in the project's own bin dir?
+HAVE_TOOL(){
+  command -v "$1" >/dev/null 2>&1 && return 0
+  [[ -n "${BIN_DIR:-}" && -x "$BIN_DIR/$1" ]]
+}
+
+# Absolute path to a tool: the project's own bin first (that is the vetted copy
+# the installer put there), then whatever is on PATH, else empty. Prints
+# nothing and returns non-zero when the tool is nowhere to be found, so callers
+# can do `BIN=$(TOOL_PATH dnsx)` and test `[[ -n "$BIN" ]]`. Replaces the
+# copy-pasted `X="$BIN_DIR/x"; [[ -x "$X" ]] || X=$(command -v x ...)` block
+# that every dnsx call site grew its own copy of.
+TOOL_PATH(){
+  if [[ -n "${BIN_DIR:-}" && -x "$BIN_DIR/$1" ]]; then
+    printf '%s' "$BIN_DIR/$1"; return 0
+  fi
+  local P
+  P="$(command -v "$1" 2>/dev/null)" || return 1
+  printf '%s' "$P"
 }
 
 # Turn a domain, wildcard, or host:port into a safe path component.
@@ -104,13 +390,53 @@ EOF
   echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 }
 
-# ---------------- REQUIRE ROOT ----------------
+# ---------------- PRIVILEGE ESCALATION ----------------
+# Scout runs as root (enforced by REQUIRE_ROOT — it installs to and runs from
+# /opt/scout). MAYBE_SUDO is therefore normally a no-op, retained so any remaining
+# `$(MAYBE_SUDO) <cmd>` prefixes stay correct if a command is ever reached in a
+# non-root context.
+#
+# MAYBE_SUDO prints "sudo" when we are not already root and sudo is available,
+# and nothing otherwise. Use it as a command prefix:  $(MAYBE_SUDO) naabu ...
+MAYBE_SUDO() {
+  (( EUID == 0 )) && return 0
+  command -v sudo >/dev/null 2>&1 && printf 'sudo'
+  return 0
+}
+
+# REQUIRE_ROOT enforces that Scout runs as root. Scout installs to and runs from
+# /opt/scout (root-owned) and several stages need privileged access, so root is
+# mandatory. When not already root we print an error, then re-exec the caller
+# under `sudo -E` — which prompts for the password ("ask for auth") and preserves
+# the SCOUT_* environment — and proceed as root. Call it as REQUIRE_ROOT "$@" so
+# the original arguments are forwarded to the re-exec.
 REQUIRE_ROOT() {
-  if (( EUID != 0 )); then
-    echo -e "${RED}[X] Root privileges required.${RESET}"
-    echo -e "${YELLOW}[*] Re-running with sudo...${RESET}\n"
-    exec sudo -E bash "$0" "$@"  # Preserve env and args
+  (( EUID == 0 )) && return 0
+  ERR "Scout must be run as root."
+  if command -v sudo >/dev/null 2>&1; then
+    INFO "Re-running as root via sudo (you may be prompted for your password)..."
+    exec sudo -E -- "$0" "$@"
   fi
+  ERR "sudo is not available — re-run this command as root."
+  exit 1
+}
+
+# GF_LINK_HOME <store>: gf resolves its pattern dir from the euid's passwd-home
+# + /.gf (it ignores $HOME and GF_PATTERNS), so to keep the actual pattern files
+# under /opt/scout we point that path at <store>. Symlink it when the path is
+# absent or already a symlink; if a real directory already exists there, copy the
+# patterns into it instead (never clobber a user's real ~/.gf). Always returns 0.
+GF_LINK_HOME() {
+  local store="$1" gfdir
+  gfdir="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)/.gf"
+  [[ -z "$gfdir" || "$gfdir" == "/.gf" ]] && return 0
+  [[ "$gfdir" == "$store" ]] && return 0
+  if [[ -d "$gfdir" && ! -L "$gfdir" ]]; then
+    cp -n "$store"/*.json "$gfdir/" 2>/dev/null || true
+  else
+    ln -sfn "$store" "$gfdir" 2>/dev/null || true
+  fi
+  return 0
 }
 
 # ---------------- SPINNER ----------------

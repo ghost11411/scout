@@ -2,29 +2,107 @@
 set -euo pipefail
 IFS=$' \t\n'
 
-# ---------------- FFUF & NUCLEI (sequential per host) ----------------
-RUN_NUCLEI(){
-  local HOST="$1"
-  local HOST_SAFE
-  HOST_SAFE=$(SAFE_NAME "$HOST")   # shared helper; was a per-host echo|sed
-  local NUC_DIR="$OUTPUT_DIR/nuclei"
-  mkdir -p "$NUC_DIR"
+# ---------------- VULNERABILITY SCANNING (nuclei) ----------------
+# ACTIVE scanning: nuclei sends real requests to the target. It is ON by default
+# now (SCOUT_NUCLEI=1) but stays inside SCOUT_SAFE — rate-limited, destructive
+# template classes excluded, and code/headless templates never executed.
+#
+# It scans the httpx live-host feed (http/live_hosts.txt): URLs already confirmed
+# to answer HTTP. Falls back to final_subdomains.out (resolved subdomains + plain
+# -dm/-df domains) if the HTTP stage did not run. Either way the out-of-scope
+# exclusions have already been applied upstream.
+#
+# TECH-TARGETED BY DEFAULT (SCOUT_NUCLEI_AS=1): nuclei's -automatic-scan does
+# per-host wappalyzer technology detection and runs ONLY the templates whose tags
+# match the tech it found on that host. That is both the "detect the tech, only
+# use matching templates" behaviour and a big request-reduction — a WordPress
+# host is not probed with 50 Jira templates. Set SCOUT_NUCLEI_AS=0 to fall back
+# to a full severity-filtered scan of the whole template store.
+#
+# TEMPLATE STORE: pinned to $TOOLS_DIR/nuclei-templates (overridable with
+# SCOUT_NUCLEI_TEMPLATES) rather than $HOME/nuclei-templates, so it is stable
+# under scout's `sudo -E` re-exec. cmd/installer populates it (official
+# ProjectDiscovery templates via -update-templates, plus vetted community repos
+# under <store>/community/). If the store is missing, nuclei falls back to its
+# own auto-downloaded default set.
+NUCLEI_SCAN(){
+  local IN="${NUCLEI_INPUT:-${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}}"
+  [[ -s "$IN" ]] || IN="$OUTPUT_DIR/final_subdomains.out"
+  local NDIR="$OUTPUT_DIR/nuclei"
+  mkdir -p "$NDIR"
 
-  # prepare nuclei targets file using host:port combos (http & https)
-  NUC_TARGETS="$NUC_DIR/${HOST_SAFE}_targets.txt"
-  # use ports file to generate host:port combos. One awk pass instead of
-  # reopening the targets file twice per port.
-  PORT_FILE="$OUTPUT_DIR/ports/${HOST_SAFE}_ports"
-  if [[ -s "$PORT_FILE" ]]; then
-    awk -v h="$HOST" 'NF { print "http://" h ":" $1; print "https://" h ":" $1 }' \
-      "$PORT_FILE" > "$NUC_TARGETS"
+  if [[ ! -s "$IN" ]]; then
+    WARN "No targets for nuclei."
+    return 0
+  fi
+  local NB; NB="$(TOOL_PATH nuclei || true)"
+  if [[ -z "$NB" ]]; then
+    WARN "nuclei not installed — skipping vulnerability scan (run 'scout install --update')."
+    return 0
+  fi
+
+  local SEV="${SCOUT_NUCLEI_SEVERITY:-low,medium,high,critical}"
+  # Gentle by default (the run touches every live host): ~50 req/s, 15 concurrent
+  # templates. Tune up with SCOUT_NUCLEI_RATELIMIT / _CONCURRENCY when the program
+  # allows it. -automatic-scan already cuts the template count per host sharply.
+  local RL="${SCOUT_NUCLEI_RATELIMIT:-50}"
+  local CONC="${SCOUT_NUCLEI_CONCURRENCY:-15}"
+  local OUT="$NDIR/nuclei.jsonl"
+
+  # Pinned template store (see header). Populated by cmd/installer, which also
+  # records it as nuclei's template directory in ~/.config/nuclei — so both -as
+  # and a plain -t run read the same store (official + community/).
+  local STORE="${SCOUT_NUCLEI_TEMPLATES:-$TOOLS_DIR/nuclei-templates}"
+  local STORE_READY=0
+  if [[ -d "$STORE" ]] && find "$STORE" -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
+    STORE_READY=1
+  fi
+
+  # SAFETY: in safe mode (default) exclude template classes that can degrade or
+  # damage a target — DoS checks and the fuzzing/DAST templates that throw
+  # payloads at every parameter. Also exclude unknown-severity noise. SCOUT_SAFE=0
+  # removes these. Note: nuclei will NOT run `code:` or headless templates here
+  # regardless, because we never pass -code / -headless — so third-party
+  # community templates in the store cannot execute local commands.
+  local SAFE_ARGS=()
+  [[ "${SCOUT_SAFE:-1}" == "1" ]] && SAFE_ARGS=(-exclude-tags dos,fuzzing,intrusive -exclude-severity unknown)
+
+  # Tech-targeting vs full-store, and how the store is wired to each:
+  #  - -automatic-scan (default): nuclei runs wappalyzer per host and selects
+  #    matching templates from its CONFIGURED template directory. It ignores -t,
+  #    so we do NOT pass -t here — the installer already pointed the config at
+  #    STORE, community templates included.
+  #  - full store (SCOUT_NUCLEI_AS=0): explicit -t "$STORE" over every template,
+  #    severity-filtered. Used when you want breadth over tech-targeting.
+  local MODE_ARGS=() TPL_ARGS=()
+  local MODE_DESC
+  if [[ "${SCOUT_NUCLEI_AS:-1}" == "1" ]]; then
+    MODE_ARGS=(-as)
+    MODE_DESC="tech-targeted (-as)"
   else
-    printf 'http://%s\nhttps://%s\n' "$HOST" "$HOST" > "$NUC_TARGETS"
+    MODE_DESC="full store"
+    (( STORE_READY )) && TPL_ARGS=(-t "$STORE")
   fi
 
-  if [[ -s "$NUC_TARGETS" ]]; then
-    NUC_OUT="$NUC_DIR/${HOST_SAFE}.json"
-    # -jsonl is the v3 flag (the installer pins nuclei/v3); v2 used -json.
-    INFO "nuclei -> $HOST" && "$(command -v nuclei || echo "$BIN_DIR/nuclei")" -l "$NUC_TARGETS" -o "$NUC_OUT" -jsonl || true
+  # Identify the scanner (see collect_http).
+  local UA_ARG=(); [[ -n "${SCOUT_UA:-}" ]] && UA_ARG=(-header "User-Agent: ${SCOUT_UA}")
+
+  START_SPINNER "nuclei $MODE_DESC scanning $(COUNT_LINES "$IN") target(s) [severity: $SEV]"
+  # -jsonl is the v3 flag (installer pins nuclei/v3). -duc: don't auto-update
+  # templates mid-scan (the installer manages the store).
+  "$NB" -l "$IN" "${MODE_ARGS[@]}" "${TPL_ARGS[@]}" \
+    -severity "$SEV" -rate-limit "$RL" -concurrency "$CONC" -duc \
+    "${SAFE_ARGS[@]}" "${UA_ARG[@]}" \
+    -no-color -silent -jsonl -o "$OUT" > /dev/null 2>&1 || true
+  STOP_SPINNER
+
+  local FINDINGS; FINDINGS=$(COUNT_LINES "$OUT")
+  if (( FINDINGS > 0 )); then
+    OK "nuclei findings: $FINDINGS -> $OUT"
+  else
+    INFO "nuclei: no findings recorded."
   fi
+  REC_TOOL "nuclei" "${ELAPSED:-0}" "$FINDINGS" \
+    "nuclei -l live_hosts.txt $MODE_DESC -severity $SEV -rate-limit $RL${SAFE_ARGS:+ -exclude-tags dos,fuzzing,intrusive}"
+  return 0
 }

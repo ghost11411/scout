@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- URL COLLECTION ----------------
+# Four sources, one at a time. gau/waybackurls mine archives (passive);
+# katana/hakrawler actively CRAWL the live in-scope hosts to find URLs that were
+# never archived. `|| true` keeps a single failing source from aborting the run
+# under `set -e`.
+#
+# SCOPE: unlike collect_js (whose third-party JS is fine to fetch and analyse),
+# all_urls.out feeds the ACTIVE injection stages (param_discovery -> XSS/OWASP),
+# so a URL on someone else's host must never enter it. gau/waybackurls already
+# return only BASE_DOMAIN URLs; katana defaults to root-domain scope (-fs rdn);
+# and both crawler outputs are additionally grep-filtered to this domain's
+# subtree (URL_SCOPE_RE) as a hard guarantee before they reach the merge.
+#
+# INPUT FORM:
+#   * gau/waybackurls take a plain apex (BASE_DOMAIN); both widen to subdomains
+#     themselves, so never pass "*.example.com" (waybackurls would make it
+#     "*.*.example.com").
+#   * the crawlers take real URLs, seeded from the live in-scope hosts under this
+#     domain (httpx's live_hosts.txt), capped by SCOUT_URL_CRAWL_LIMIT, apex
+#     fallback. See cmd/collect_js for the same pattern and the katana `-jc` /
+#     hakrawler `-u -subs` flag notes.
+_URL_GAU()       { "$BIN_DIR/gau" --subs "$BASE_DOMAIN" > "$URL_DIR/gau.out" 2>/dev/null || true; }
+_URL_WAYBACK()   { echo "$BASE_DOMAIN" | "$BIN_DIR/waybackurls" > "$URL_DIR/wayback.out" 2>/dev/null || true; }
+_URL_KATANA()    { "$BIN_DIR/katana" -list "$URL_SEEDS" -jc -silent -d "${SCOUT_KATANA_DEPTH:-3}" -fs rdn \
+                     "${KATANA_ARGS[@]}" 2>/dev/null | grep -iE "$URL_SCOPE_RE" | sort -u > "$URL_DIR/katana.out" || true; }
+_URL_HAKRAWLER() { "$BIN_DIR/hakrawler" -u -subs -insecure -d "${SCOUT_HAKRAWLER_DEPTH:-2}" \
+                     "${HAKRAWLER_ARGS[@]}" < "$URL_SEEDS" 2>/dev/null | grep -iE "$URL_SCOPE_RE" | sort -u > "$URL_DIR/hakrawler.out" || true; }
+
+COLLECT_URLS(){
+  RAW_DIR="$OUTPUT_DIR/urls"
+  mkdir -p "$RAW_DIR"
+
+  local RUNNERS=(_URL_GAU _URL_WAYBACK _URL_KATANA _URL_HAKRAWLER)
+  local RUNNER
+
+  # wildcards_base.txt, not wildcards_all.txt: the base list is the star-free
+  # one every stage is allowed to read. Guard the file before the redirect —
+  # `done < ""` (both vars empty, i.e. no usable wildcards) is not a no-op under
+  # `set -e`, it aborts the whole run with "ambiguous redirect".
+  local WC_FILE="${INPUT_WILDCARD_BASE_FILE:-${INPUT_WILDCARD_ALL_FILE:-}}"
+  if [[ -z "$WC_FILE" || ! -f "$WC_FILE" ]]; then
+    WARN "No wildcard targets to collect URLs for."
+    return 0
+  fi
+
+  # Active-crawler tuning shared across domains (see cmd/collect_js). Safe mode
+  # rate-limits/bounds concurrency; SCOUT_UA identifies the crawler.
+  local LIVE_FEED="${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}"
+  KATANA_ARGS=(-timeout 10)
+  HAKRAWLER_ARGS=(-timeout 10)
+  if [[ "${SCOUT_SAFE:-1}" == "1" ]]; then
+    KATANA_ARGS+=(-rl "${SCOUT_KATANA_RL:-50}" -c "${SCOUT_KATANA_CONC:-10}")
+    HAKRAWLER_ARGS+=(-t "${SCOUT_HAKRAWLER_THREADS:-5}")
+  else
+    HAKRAWLER_ARGS+=(-t "${SCOUT_HAKRAWLER_THREADS:-8}")
+  fi
+  [[ -n "${SCOUT_UA:-}" ]] && KATANA_ARGS+=(-H "User-Agent: ${SCOUT_UA}")
+  [[ -n "${SCOUT_UA:-}" ]] && HAKRAWLER_ARGS+=(-h "User-Agent: ${SCOUT_UA}")
+
+  while read -r DOMAIN; do
+    DOMAIN="${DOMAIN//[[:space:]]/}"
+    [[ -z "$DOMAIN" ]] && continue
+    # Same gate as every other stage; see the INPUT FORM note above.
+    if ! BASE_DOMAIN=$(PREP_TARGET "$DOMAIN"); then
+      WARN "Skipping '$DOMAIN': not a usable domain."
+      continue
+    fi
+    INFO "Collecting URLs for $BASE_DOMAIN"
+    URL_DIR="$RAW_DIR/$(SAFE_NAME "$DOMAIN")"
+    mkdir -p "$URL_DIR"
+
+    # In-scope filter + crawler seeds for this domain (host is BASE_DOMAIN or a
+    # subdomain of it). Seeds come from the live feed, capped; apex fallback.
+    local _esc="${BASE_DOMAIN//./\\.}"
+    URL_SCOPE_RE="^https?://([a-z0-9._-]+\.)?${_esc}([/:?#]|$)"
+    URL_SEEDS="$URL_DIR/_seeds.txt"
+    : > "$URL_SEEDS"
+    if [[ -s "$LIVE_FEED" ]]; then
+      grep -iE "$URL_SCOPE_RE" "$LIVE_FEED" 2>/dev/null \
+        | sort -u | head -n "${SCOUT_URL_CRAWL_LIMIT:-50}" > "$URL_SEEDS" || true
+    fi
+    [[ -s "$URL_SEEDS" ]] || echo "https://$BASE_DOMAIN" > "$URL_SEEDS"
+    export DOMAIN BASE_DOMAIN URL_DIR URL_SEEDS URL_SCOPE_RE
+
+    # One at a time; `|| true` because a direct call (unlike `wait`) lets a
+    # non-zero exit abort the run under `set -e`.
+    for RUNNER in "${RUNNERS[@]}"; do
+      local tname cfile ccmd seeds_n
+      seeds_n="$(COUNT_LINES "$URL_SEEDS")"
+      case "$RUNNER" in
+        _URL_GAU)       tname="gau";        cfile="$URL_DIR/gau.out";       ccmd="gau --subs $BASE_DOMAIN";;
+        _URL_WAYBACK)   tname="waybackurls"; cfile="$URL_DIR/wayback.out";   ccmd="waybackurls (<<< $BASE_DOMAIN)";;
+        _URL_KATANA)    tname="katana";     cfile="$URL_DIR/katana.out";    ccmd="katana -list <$seeds_n seed(s)> -jc -fs rdn -d ${SCOUT_KATANA_DEPTH:-3}";;
+        _URL_HAKRAWLER) tname="hakrawler";  cfile="$URL_DIR/hakrawler.out"; ccmd="hakrawler -u -subs -d ${SCOUT_HAKRAWLER_DEPTH:-2} (<$seeds_n seed(s))";;
+        *)              tname="${RUNNER#_URL_}"; cfile=""; ccmd="$RUNNER";;
+      esac
+      START_SPINNER "${RUNNER#_URL_} on $BASE_DOMAIN"
+      "$RUNNER" || true
+      STOP_SPINNER
+      OK "${RUNNER#_URL_} done (${ELAPSED}s, $(COUNT_LINES "$cfile") urls)"
+      REC_TOOL "$tname" "${ELAPSED:-0}" "$(COUNT_LINES "$cfile")" "$ccmd"
+    done
+  done < "$WC_FILE"
+
+  # after all tools finished for all domains, combine into single file
+  ALL_URLS_FILE="$RAW_DIR/all_urls.out"
+  CAT_LINES "$RAW_DIR"/*/*.out | sort -u > "$ALL_URLS_FILE" || true
+  # Drop URLs on out-of-scope hosts (-xc/-xf) before the injection stages read
+  # this file — the scope gate applies to URLs, not just the host lists.
+  EXCLUDE_URLS "$ALL_URLS_FILE" "${EXCLUDE_ALL_FILE:-}"
+  OK "Collected all URLs -> $ALL_URLS_FILE ($(COUNT_LINES "$ALL_URLS_FILE") URLs)"
+}

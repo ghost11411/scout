@@ -9,16 +9,33 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
-INSTALL_DIR="${HOME}/scout"
-TOOLS_DIR="${INSTALL_DIR}/tools"
-BIN_DIR="${TOOLS_DIR}/bin"
-WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
-GF_DIR="$WORDLISTS_DIR/GF-Patterns"
-SUBLISTER_DIR="$BIN_DIR/sublist3r"
+# Hardcoded install locations — absolute literals, independent of $HOME, so the
+# installer and every `scout` run agree on where the toolset lives.
+INSTALL_DIR="/opt/scout"
+TOOLS_DIR="/opt/scout/tools"
+BIN_DIR="/opt/scout/tools/bin"
+WORDLISTS_DIR="/opt/scout/tools/wordlists"
+RESOLVERS_FILE="/opt/scout/tools/wordlists/resolvers.txt"
+GF_DIR="/opt/scout/tools/wordlists/GF-Patterns"
+SUBLISTER_DIR="/opt/scout/tools/bin/sublist3r"
+# pipx: keep venvs (subdominator/bbot/arjun) and their app symlinks entirely
+# under /opt/scout instead of the running user's ~/.local. Exported so `pipx
+# install` below honours them. PIPX_BIN_DIR = BIN_DIR so the app entrypoints land
+# straight in the toolset bin dir; the functions also add an explicit symlink.
+PIPX_HOME="/opt/scout/tools/pipx"
+PIPX_BIN_DIR="/opt/scout/tools/bin"
+export PIPX_HOME PIPX_BIN_DIR
+# gf hardcodes $HOME/.gf, so patterns are mirrored into $GF_HOME/.gf and scout
+# runs gf with HOME=$GF_HOME (see cmd/analyze_urls).
+GF_HOME="/opt/scout/tools/gf-home"
 
 APT_PACKAGES=(
-  git whois jq unzip python3 python3-pip python3-requests python3-dnspython gcc 
+  git whois jq unzip python3 python3-pip python3-requests python3-dnspython gcc
   curl wget zip python3-shodan make ca-certificates libpcap-dev golang-go pipx
+  # bbot's pipx venv builds a few native wheels and needs its own venv module;
+  # coreutils supplies the `timeout` that bounds the bbot run in
+  # cmd/collect_subdomains.
+  python3-dev python3-venv build-essential libssl-dev libffi-dev coreutils dnsutils
 )
 
 GO_TOOLS=(
@@ -29,7 +46,9 @@ GO_TOOLS=(
   "subdog|github.com/rix4uni/subdog@latest"
   "xsubfind3r|github.com/hueristiq/xsubfind3r/cmd/xsubfind3r@latest"
   "cero|github.com/glebarez/cero@latest"
-  "puredns|github.com/d3mondev/puredns/v2@latest"
+  # dnsx is the resolver for every DNS stage (resolve, brute force, wildcard
+  # filtering). puredns was removed along with massdns: it is only a front-end
+  # for the massdns binary and does nothing without it.
   "dnsx|github.com/projectdiscovery/dnsx/cmd/dnsx@latest"
   "gf|github.com/tomnomnom/gf@latest"
   "unfurl|github.com/tomnomnom/unfurl@latest"
@@ -42,9 +61,41 @@ GO_TOOLS=(
   "jsluice|github.com/BishopFox/jsluice/cmd/jsluice@latest"
   "nuclei|github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
   "naabu|github.com/projectdiscovery/naabu/v2/cmd/naabu@latest"
+  # --- subdomain enumeration additions ---
+  # amass has no @latest release tag on the module path; @master is the
+  # documented install line. `/...` builds every cmd in the module, of which
+  # only `amass` lands in GOBIN.
+  "amass|github.com/owasp-amass/amass/v4/...@master"
+  "alterx|github.com/projectdiscovery/alterx/cmd/alterx@latest"
+  "github-subdomains|github.com/gwen001/github-subdomains@latest"
+  "chaos|github.com/projectdiscovery/chaos-client/cmd/chaos@latest"
+  # --- full-pipeline additions ---
+  # asnmap: seed/ASN expansion (review-only stage). gowitness: screenshots
+  # (needs a headless Chromium, installed best-effort below).
+  "asnmap|github.com/projectdiscovery/asnmap/cmd/asnmap@latest"
+  "gowitness|github.com/sensepost/gowitness@latest"
+  # subzy: subdomain-takeover detection (cmd/takeover). A single go install;
+  # the takeover stage falls back to nuclei's takeover templates without it.
+  # Module moved from LukaSikic/subzy to PentestPad/subzy (the old path's go.mod
+  # now declares the new module path, so @latest on the old path fails).
+  "subzy|github.com/PentestPad/subzy@latest"
+  # --- active vulnerability testing (cmd/scan_xss, cmd/scan_owasp, cmd/param_discovery) ---
+  # qsreplace: swap every URL parameter value for a payload (the backbone of the
+  # gf|qsreplace|probe pipelines every methodology uses). Gxss: mark reflected
+  # parameters. dalfox: the de-facto open-source XSS scanner. interactsh-client:
+  # OOB collaborator for blind SSRF. gitdorks_go: GitHub code dorking.
+  "qsreplace|github.com/tomnomnom/qsreplace@latest"
+  "Gxss|github.com/KathanP19/Gxss@latest"
+  "dalfox|github.com/hahwul/dalfox/v2@latest"
+  "interactsh-client|github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest"
+  "gitdorks_go|github.com/damit5/gitdorks_go@latest"
 )
 
 WORDLISTS=(
+  # OneListForAll (six2dez): the curated best-in-class content-discovery list
+  # (SecLists + Assetnote + more, deduped). This is the default wordlist for the
+  # ffuf content-discovery stage; raft-large-directories.txt is the fallback.
+  "https://raw.githubusercontent.com/six2dez/OneListForAll/main/onelistforallmicro.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-directories.txt"
   "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-large-files.txt"
 )
@@ -54,6 +105,27 @@ WORDLISTS=(
 # survives sudo resetting HOME.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 source "${SCRIPT_DIR}/lib"
+
+# Installing into /opt/scout (root-owned) and the apt step both need root, so
+# root is mandatory. REQUIRE_ROOT errors, prompts for the password, and re-execs
+# under sudo. (configure normally re-execs first, so this is usually already root
+# — but the installer self-guards when run directly.)
+REQUIRE_ROOT "$@"
+
+# ---------------- IDEMPOTENCY ----------------
+# Re-running the installer (notably `configure --update`, which re-runs it to
+# pick up a one-line change) used to rebuild everything: 24 `go install`
+# compiles, a massdns clone+compile, two pipx venv rebuilds and every wordlist
+# re-downloaded. NEED_INSTALL makes each step a no-op when its artifact is
+# already on disk.
+#
+# `configure --force` exports SCOUT_REINSTALL=1 to get the old behaviour back;
+# REQUIRE_ROOT re-execs with `sudo -E`, so the variable survives the re-exec.
+NEED_INSTALL() {
+  [[ -n "${SCOUT_REINSTALL:-}" ]] && return 0   # forced: always install
+  [[ -e "$1" ]] && return 1                     # already there: skip
+  return 0
+}
 
 # ---------------- CLEANUP ----------------
 CLEANUP() {
@@ -66,7 +138,10 @@ CLEANUP() {
 trap CLEANUP SIGINT
 
 # ---------------- MAIN INSTALL ----------------
-REQUIRE_ROOT "$@"
+# Runs as root (enforced by REQUIRE_ROOT above), installing into /opt/scout.
+# SUDO is therefore empty here; it is retained only so the command prefixes below
+# stay valid if the installer is ever adapted to run without the root guard.
+SUDO="$(MAYBE_SUDO)"
 
 # ---------------- PREPARE DIRECTORIES ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
@@ -80,8 +155,8 @@ find "$INSTALL_DIR/cmd" -type f -exec chmod +x {} + 2>/dev/null || true
 # ---------------- APT INSTALL WITH SPINNER ----------------
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Installing and Updating APT packages..."
-START_SPINNER "Installing APT packages"
-if { apt-get update -y -qq && apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; } > /dev/null 2>&1; then
+START_SPINNER "Installing APT packages${SUDO:+ (via sudo)}"
+if { $SUDO apt-get update -y -qq && $SUDO apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; } > /dev/null 2>&1; then
   STOP_SPINNER
   OK "APT packages installed in (${ELAPSED}s)"
 else
@@ -99,14 +174,32 @@ if command -v go >/dev/null 2>&1; then
     # or OOMs. Cap at nproc (max 4).
     JOBS=$(nproc 2>/dev/null || echo 2)
     (( JOBS > 4 )) && JOBS=4
-    INFO "Installing ${#GO_TOOLS[@]} Go tools (${JOBS} at a time)..."
+
+    # Work out what is actually missing before starting the spinner, so the
+    # common case (nothing to do) doesn't spin for a second and claim to be
+    # "installing".
+    TODO=()
+    PRESENT=0
+    for PAIR in "${GO_TOOLS[@]}"; do
+        if NEED_INSTALL "$BIN_DIR/${PAIR%%|*}"; then
+            TODO+=("$PAIR")
+        else
+            PRESENT=$((PRESENT+1))
+        fi
+    done
+    (( PRESENT > 0 )) && OK "$PRESENT Go tools already installed — skipped (use 'configure --force' to reinstall)"
+
+    if (( ${#TODO[@]} == 0 )); then
+        INFO "No Go tools to install"
+    else
+    INFO "Installing ${#TODO[@]} Go tools (${JOBS} at a time)..."
     NOW START
     START_SPINNER "Installing Go tools"
 
     PIDS=()
     NAMES=()
     FAILED=()
-    for PAIR in "${GO_TOOLS[@]}"; do
+    for PAIR in "${TODO[@]}"; do
         NAME="${PAIR%%|*}"
         PKG="${PAIR#*|}"
         go install -trimpath "$PKG" > /dev/null 2>&1 &
@@ -131,6 +224,7 @@ if command -v go >/dev/null 2>&1; then
     if (( ${#FAILED[@]} > 0 )); then
         WARN "Failed to install: ${FAILED[*]}"
     fi
+    fi   # end: something to install
 else
     WARN "Go not found – skipping Go tools"
 fi
@@ -147,7 +241,9 @@ RUN_STEP() {
   "$FN" || true
   STOP_SPINNER
   NOW END
-  if [[ "$STATUS" == "success" ]]; then
+  if [[ "$STATUS" == "present" ]]; then
+    OK "$NAME already installed — skipped"
+  elif [[ "$STATUS" == "success" ]]; then
     OK "$NAME installed in ($((END - START))s)"
   else
     WARN "$NAME installation failed ($((END - START))s)"
@@ -155,6 +251,7 @@ RUN_STEP() {
 }
 
 INSTALL_FINDOMAIN() {
+  if ! NEED_INSTALL "$BIN_DIR/findomain"; then STATUS="present"; return 0; fi
   local URL="https://github.com/Findomain/Findomain/releases/latest/download/findomain-linux.zip"
   local TMP ZIP
   TMP=$(mktemp -d)
@@ -168,10 +265,11 @@ RUN_STEP findomain INSTALL_FINDOMAIN
 
 # ---- SUBLIST3R ----
 INSTALL_SUBLIST3R() {
-  if [[ -d "$SUBLISTER_DIR" ]]; then
-    STATUS="success"
+  if ! NEED_INSTALL "$SUBLISTER_DIR/sublist3r.py"; then
+    STATUS="present"
     return
   fi
+  rm -rf "$SUBLISTER_DIR"
   git clone "https://github.com/aboul3la/Sublist3r.git" "$SUBLISTER_DIR" > /dev/null 2>&1 || true
   if pip3 install -q -r "$SUBLISTER_DIR/requirements.txt" --break-system-packages &>/dev/null; then
     STATUS="success"
@@ -180,39 +278,150 @@ INSTALL_SUBLIST3R() {
 RUN_STEP sublist3r INSTALL_SUBLIST3R
 
 INSTALL_SUBDOMINATOR(){
-  pipx install subdominator --force > /dev/null 2>&1 || true
-  pipx ensurepath > /dev/null 2>&1 || true
-  ln -sf "$HOME/.local/share/pipx/venvs/subdominator/bin/subdominator" "$BIN_DIR/subdominator" || true
-  command -v subdominator >/dev/null 2>&1 && STATUS="success"
+  if ! NEED_INSTALL "$BIN_DIR/subdominator"; then STATUS="present"; return 0; fi
+  # --force only when we mean it: it tears down and rebuilds the whole venv.
+  # PIPX_HOME/PIPX_BIN_DIR (exported above) keep the venv under /opt/scout.
+  pipx install subdominator ${SCOUT_REINSTALL:+--force} > /dev/null 2>&1 || true
+  ln -sf "$PIPX_HOME/venvs/subdominator/bin/subdominator" "$BIN_DIR/subdominator" || true
+  [[ -x "$BIN_DIR/subdominator" ]] && STATUS="success"
   return 0
 }
 RUN_STEP subdominator INSTALL_SUBDOMINATOR
 
-INSTALL_MASSDNS() {
-  git clone https://github.com/blechschmidt/massdns.git "/tmp/massdns" > /dev/null 2>&1 || true
-  if [[ -d /tmp/massdns ]]; then
-    # already running as root via REQUIRE_ROOT, so no `sudo` needed here
-    (cd /tmp/massdns && make > /dev/null 2>&1 && make install > /dev/null 2>&1) || true
-    cp /tmp/massdns/bin/massdns "$BIN_DIR/" 2>/dev/null || true
-  fi
-  rm -rf /tmp/massdns
-  cd "$INSTALL_DIR" || true
-  command -v massdns >/dev/null 2>&1 && STATUS="success"
+# ---- BBOT ----
+# Installed the same way as subdominator: its own pipx venv, symlinked into
+# BIN_DIR. pipx (not pip) because bbot pins a large dependency set that has no
+# business landing in the system site-packages.
+INSTALL_BBOT() {
+  if ! NEED_INSTALL "$BIN_DIR/bbot"; then STATUS="present"; return 0; fi
+  pipx install bbot ${SCOUT_REINSTALL:+--force} > /dev/null 2>&1 || true
+  ln -sf "$PIPX_HOME/venvs/bbot/bin/bbot" "$BIN_DIR/bbot" || true
+  [[ -x "$BIN_DIR/bbot" ]] && STATUS="success"
   return 0
 }
-RUN_STEP massdns INSTALL_MASSDNS
+RUN_STEP bbot INSTALL_BBOT
+
+# ---- ARJUN (hidden HTTP parameter discovery, cmd/param_discovery) ----
+# Own pipx venv, symlinked into BIN_DIR, exactly like subdominator/bbot.
+INSTALL_ARJUN() {
+  if ! NEED_INSTALL "$BIN_DIR/arjun"; then STATUS="present"; return 0; fi
+  pipx install arjun ${SCOUT_REINSTALL:+--force} > /dev/null 2>&1 || true
+  ln -sf "$PIPX_HOME/venvs/arjun/bin/arjun" "$BIN_DIR/arjun" || true
+  [[ -x "$BIN_DIR/arjun" ]] && STATUS="success"
+  return 0
+}
+RUN_STEP arjun INSTALL_ARJUN
+
+# ---- NUCLEI TEMPLATE STORE (official + vetted community) ----
+# cmd/nuclei_scan runs -automatic-scan, which reads nuclei's CONFIGURED template
+# directory (not -t). We pin that directory to $TOOLS_DIR/nuclei-templates via
+# `-ud`, so it is stable under scout's `sudo -E` re-exec, and populate it with:
+#   * the official ProjectDiscovery set (-ut, ~13.5k templates), and
+#   * a few well-known community repos under <store>/community/.
+# SAFETY: any template declaring the `code:` protocol is deleted from the
+# community clones. nuclei will not execute code/headless templates anyway
+# (we never pass -code/-headless), but stripping them is belt-and-suspenders
+# against a malicious third-party template.
+NUCLEI_TEMPLATES_DIR="$TOOLS_DIR/nuclei-templates"
+# name|git-url — extend this list to add more community sources.
+NUCLEI_COMMUNITY_REPOS=(
+  "coffinxp-lostsec|https://github.com/coffinxp/nuclei-templates"
+  "geeknik|https://github.com/geeknik/the-nuclei-templates"
+)
+INSTALL_NUCLEI_TEMPLATES() {
+  local NB; NB="$BIN_DIR/nuclei"; [[ -x "$NB" ]] || NB="$(command -v nuclei 2>/dev/null || true)"
+  if [[ -z "$NB" ]]; then STATUS="fail"; WARN "nuclei not installed — skipping template store"; return 0; fi
+  if ! NEED_INSTALL "$NUCLEI_TEMPLATES_DIR/.checksum" && \
+     [[ -d "$NUCLEI_TEMPLATES_DIR" ]]; then
+    # Refresh official set on --update, but don't re-clone community every time.
+    "$NB" -ud "$NUCLEI_TEMPLATES_DIR" -ut > /dev/null 2>&1 || true
+    STATUS="present"; return 0
+  fi
+  mkdir -p "$NUCLEI_TEMPLATES_DIR"
+  # Official templates + record this dir as nuclei's template directory.
+  "$NB" -ud "$NUCLEI_TEMPLATES_DIR" -ut > /dev/null 2>&1 || true
+  local CDIR="$NUCLEI_TEMPLATES_DIR/community" pair name url dst
+  mkdir -p "$CDIR"
+  for pair in "${NUCLEI_COMMUNITY_REPOS[@]}"; do
+    name="${pair%%|*}"; url="${pair#*|}"; dst="$CDIR/$name"
+    if [[ -d "$dst/.git" ]]; then
+      git -C "$dst" pull --ff-only -q > /dev/null 2>&1 || true
+    else
+      git clone --depth 1 -q "$url" "$dst" > /dev/null 2>&1 || true
+    fi
+  done
+  # Strip code-protocol templates from the community clones (see SAFETY above).
+  grep -rlE '^\s*-?\s*code:|^code:' "$CDIR" --include='*.yaml' 2>/dev/null | xargs -r rm -f
+  [[ -f "$NUCLEI_TEMPLATES_DIR/.checksum" ]] && STATUS="success"
+  return 0
+}
+RUN_STEP "nuclei templates (official + community)" INSTALL_NUCLEI_TEMPLATES
+
+# ---- HEADLESS CHROMIUM (for gowitness screenshots) ----
+# Kept OUT of APT_PACKAGES on purpose: the package name differs across distros
+# (chromium vs chromium-browser) and an unknown name would fail the whole apt
+# batch. Best-effort here, and screenshots are opt-in anyway.
+INSTALL_CHROMIUM(){
+  if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then
+    STATUS="present"; return 0
+  fi
+  $SUDO apt-get install -y -qq --no-install-recommends chromium > /dev/null 2>&1 ||
+    $SUDO apt-get install -y -qq --no-install-recommends chromium-browser > /dev/null 2>&1 || true
+  { command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; } && STATUS="success"
+  return 0
+}
+RUN_STEP "chromium (for screenshots)" INSTALL_CHROMIUM
+
+# NOTE: massdns used to be built from source here (clone -> make -> copy the
+# binary), and puredns drove it for every DNS stage. Both are gone: the build
+# was the most fragile step in the installer (a half-finished /tmp/massdns
+# left `make` with no Makefile, and every failure was swallowed by `|| true`,
+# so the run continued and only failed later at resolve time). dnsx is a plain
+# `go install` from GO_TOOLS with no compile step, and now does resolution,
+# brute force and wildcard filtering. Don't reintroduce a from-source build
+# here without a real failure check.
 
 # ---- CLONE GIT REPOS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
-INFO "Cloning GF patterns..."
-git clone "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" > /dev/null 2>&1 || true
+# `git clone` into an existing directory fails, so on every past re-run this
+# was a swallowed error rather than an update.
+if [[ -d "$GF_DIR/.git" ]]; then
+  INFO "Updating GF patterns..."
+  git -C "$GF_DIR" pull --ff-only > /dev/null 2>&1 || true
+else
+  INFO "Cloning GF patterns..."
+  rm -rf "$GF_DIR"
+  git clone "https://github.com/1ndianl33t/GF-Patterns.git" "$GF_DIR" > /dev/null 2>&1 || true
+fi
+# gf hardcodes its pattern dir to the euid's passwd home + /.gf (ignores $HOME and
+# GF_PATTERNS) and cannot read the clone dir, so mirror the patterns into the
+# canonical store $GF_HOME/.gf and symlink the passwd-home .gf (e.g. /root/.gf)
+# to it via GF_LINK_HOME — keeping the actual files under /opt/scout.
+if compgen -G "$GF_DIR/*.json" > /dev/null 2>&1; then
+  mkdir -p "$GF_HOME/.gf"
+  cp -f "$GF_DIR"/*.json "$GF_HOME/.gf/" 2>/dev/null || true
+  GF_LINK_HOME "$GF_HOME/.gf"
+fi
 OK "GF patterns ready"
 
 # ---- WORDLISTS ----
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Downloading Wordlists & Resolvers..."
+# Defensive re-guard: the wordlists dir is created once up top (line ~132), but
+# a `curl -o "$WORDLISTS_DIR/<f>"` fails with "No such file or directory" if the
+# dir is ever absent here — and every download below swallows that under
+# `|| true`/a spinner, so all of resolvers/dns/ffuf/gitdorks vanish silently.
+# The GF-Patterns clone above and the resolvers/dns/gitdorks fetches below write
+# into this same dir, so this guard covers the whole wordlist section.
+mkdir -p "$WORDLISTS_DIR"
 for URL in "${WORDLISTS[@]}"; do
   FNAME=$(basename "$URL")
+  # A non-empty wordlist on disk is a wordlist: don't re-download tens of MB on
+  # every update. `configure --force` re-fetches them.
+  if [[ -s "$WORDLISTS_DIR/$FNAME" ]] && ! NEED_INSTALL "$WORDLISTS_DIR/$FNAME"; then
+    OK "$FNAME already present — skipped"
+    continue
+  fi
   START_SPINNER "Downloading $FNAME"
   if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
     STOP_SPINNER
@@ -223,10 +432,52 @@ for URL in "${WORDLISTS[@]}"; do
   fi
 done
 
+# DNS brute-force wordlist for `puredns bruteforce` in cmd/collect_subdomains.
+# Fetched by explicit name (not through WORDLISTS above, which keys off the
+# URL basename) because the pipeline looks for exactly this filename.
+# Override at scan time with SCOUT_DNS_WORDLIST=/path/to/other.txt.
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+INFO "Downloading DNS brute-force wordlist..."
+DNS_WORDLIST_URL="https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-110000.txt"
+if [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]] && ! NEED_INSTALL "$WORDLISTS_DIR/dns_subdomains.txt"; then
+  OK "DNS brute-force wordlist already present — skipped"
+else
+  START_SPINNER "Downloading dns_subdomains.txt"
+  curl -sL -o "$WORDLISTS_DIR/dns_subdomains.txt" "$DNS_WORDLIST_URL" || true
+  STOP_SPINNER
+fi
+if [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]]; then
+  OK "DNS brute-force wordlist downloaded ($(COUNT_LINES "$WORDLISTS_DIR/dns_subdomains.txt") words)"
+else
+  WARN "DNS brute-force wordlist download failed — brute force will be skipped at scan time"
+fi
+
+# GitHub dork list for gitdorks_go (cmd/github_dork). Explicit filename, like
+# the DNS wordlist above, because the stage looks for exactly this name.
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+INFO "Downloading GitHub dorks list..."
+GITDORKS_URL="https://raw.githubusercontent.com/damit5/gitdorks_go/master/Dorks/medium_dorks.txt"
+if [[ -s "$WORDLISTS_DIR/gitdorks.txt" ]] && ! NEED_INSTALL "$WORDLISTS_DIR/gitdorks.txt"; then
+  OK "GitHub dorks list already present — skipped"
+else
+  START_SPINNER "Downloading gitdorks.txt"
+  curl -sL -o "$WORDLISTS_DIR/gitdorks.txt" "$GITDORKS_URL" || true
+  STOP_SPINNER
+fi
+[[ -s "$WORDLISTS_DIR/gitdorks.txt" ]] && OK "GitHub dorks list downloaded ($(COUNT_LINES "$WORDLISTS_DIR/gitdorks.txt") dorks)" \
+  || WARN "GitHub dorks list download failed — github_dork will be skipped at scan time"
+
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Downloading DNS Resolvers list..."
-wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$WORDLISTS_DIR/resolvers.txt" -q || true
-if [[ -s "$WORDLISTS_DIR/resolvers.txt" ]]; then
+# Skipped when already present, like everything else. Resolvers do go stale
+# and a thin resolver list shows up as poor resolution rather than an error —
+# refresh with `configure --force` if results look light.
+if [[ -s "$RESOLVERS_FILE" ]] && ! NEED_INSTALL "$RESOLVERS_FILE"; then
+  OK "Resolvers list already present — skipped (refresh with 'configure --force')"
+else
+  wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$RESOLVERS_FILE" -q || true
+fi
+if [[ -s "$RESOLVERS_FILE" ]]; then
   OK "Resolvers list downloaded"
 else
   WARN "Resolvers list download failed"
@@ -240,7 +491,13 @@ INFO "Setting Permissions and Symlinks..."
 # README, requirements.txt), none of which should be executable.
 find "$BIN_DIR" -maxdepth 1 -type f -exec chmod 755 {} +
 chmod +x "$INSTALL_DIR/scout" 2>/dev/null || true
-ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout
+# Root install: link scout into /usr/local/bin (on PATH for all users). $SUDO is
+# empty here (already root); `|| WARN` keeps set -e from aborting before VERIFY.
+if $SUDO ln -sf "$INSTALL_DIR/scout" /usr/local/bin/scout 2>/dev/null; then
+  OK "Linked /usr/local/bin/scout"
+else
+  WARN "Could not link /usr/local/bin/scout — run scout directly from $INSTALL_DIR/scout."
+fi
 
 # ---------------- VERIFY INSTALL ----------------
 VERIFY_INSTALL() {
@@ -255,17 +512,52 @@ VERIFY_INSTALL() {
   done
   [[ -x "$BIN_DIR/findomain" ]] || { WARN "Findomain missing"; ERRORS=$((ERRORS+1)); }
   [[ -f "$SUBLISTER_DIR/sublist3r.py" ]] || { WARN "Sublist3r missing"; ERRORS=$((ERRORS+1)); }
-  [[ -x "$BIN_DIR/massdns" ]] || { WARN "Massdns missing"; ERRORS=$((ERRORS+1)); }
   [[ -x "$BIN_DIR/subdominator" ]] || { WARN "Subdominator missing"; ERRORS=$((ERRORS+1)); }
+  [[ -x "$BIN_DIR/bbot" ]] || { WARN "BBOT missing"; ERRORS=$((ERRORS+1)); }
+  [[ -x "$BIN_DIR/arjun" ]] || { WARN "Arjun missing (parameter discovery)"; ERRORS=$((ERRORS+1)); }
+  [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]] || { WARN "DNS brute-force wordlist missing"; ERRORS=$((ERRORS+1)); }
   for URL in "${WORDLISTS[@]}"; do
     FNAME=$(basename "$URL")
     [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Wordlist missing: $FNAME"; ERRORS=$((ERRORS+1)); }
   done
-  [[ -s "$WORDLISTS_DIR/resolvers.txt" ]] || { WARN "Resolvers list missing"; ERRORS=$((ERRORS+1)); }
-  [[ -L /usr/local/bin/scout && -x /usr/local/bin/scout ]] || { WARN "Symlink missing or not executable"; ERRORS=$((ERRORS+1)); }
+  [[ -s "$RESOLVERS_FILE" ]] || { WARN "Resolvers list missing"; ERRORS=$((ERRORS+1)); }
+  [[ -x /usr/local/bin/scout ]] \
+    || { WARN "scout symlink missing (/usr/local/bin/scout) — run from $INSTALL_DIR"; ERRORS=$((ERRORS+1)); }
   (( ERRORS == 0 )) && OK "All verified successfully!" || WARN "$ERRORS issues detected."
 }
 VERIFY_INSTALL
+
+# ---------------- FIX OWNERSHIP & PERMISSIONS (/opt/scout) ----------------
+# The tree now lives under /opt/scout, which is root-owned, so a `sudo` install
+# leaves every file owned by root. An unprivileged `scout` run then cannot write
+# scan output under workspace/ (and, depending on umask, may not traverse the
+# tree). Runs last, after everything above has been created, so it covers the
+# whole install: hand the tree to the invoking non-root user and normalise modes
+# (world-readable/traversable, owner-writable, binaries + entry scripts +x).
+echo -e "${BOLD}${GREEN}=====================================================${RESET}"
+INFO "Fixing ownership and permissions on ${INSTALL_DIR}..."
+if [[ -d "$INSTALL_DIR" ]]; then
+  # Prefer the user that invoked `sudo`; fall back to the current user when the
+  # installer was run directly (already-unprivileged, or root logged in as root).
+  OWNER_USER="${SUDO_USER:-$(id -un)}"
+  OWNER_GROUP="$(id -gn "$OWNER_USER" 2>/dev/null || echo "$OWNER_USER")"
+  # $SUDO is empty when already root (the `sudo ./configure` path) and "sudo"
+  # otherwise, so these run with whatever privilege is needed and never abort
+  # the installer under set -e.
+  $SUDO chown -R "$OWNER_USER:$OWNER_GROUP" "$INSTALL_DIR" 2>/dev/null \
+    || WARN "Could not chown $INSTALL_DIR to $OWNER_USER — re-run the installer with sudo to fix ownership."
+  # Dirs -> rwxr-xr-x, files -> readable by all + writable by owner. The capital
+  # X only adds +x to directories and already-executable files.
+  $SUDO chmod -R u+rwX,go+rX "$INSTALL_DIR" 2>/dev/null || true
+  # Re-assert +x on the installed binaries and entry scripts (the -R pass above
+  # would not have flipped non-executable files to executable).
+  $SUDO find "$BIN_DIR" -maxdepth 1 -type f -exec chmod 755 {} + 2>/dev/null || true
+  $SUDO chmod +x "$INSTALL_DIR/scout" "$INSTALL_DIR/configure" 2>/dev/null || true
+  $SUDO find "$INSTALL_DIR/cmd" -type f -exec chmod +x {} + 2>/dev/null || true
+  OK "Ownership set to ${OWNER_USER}:${OWNER_GROUP}; permissions normalised."
+else
+  WARN "$INSTALL_DIR does not exist — skipping permission fix."
+fi
 
 # ---------------- FINAL ----------------
 END_TIME=$(date +%s)

@@ -3,44 +3,122 @@ set -euo pipefail
 IFS=$' \t\n'
 
 # ---------------- JS FILE COLLECTION ----------------
-# Like collect_subdomains, these four sources are independent and I/O bound, so
-# they run together instead of one after another. Each ends in `|| true`: a
-# domain with no .js URLs makes `grep` exit 1, which under `set -o pipefail`
-# would otherwise abort the whole scan.
-_JS_GAU()       { "$BIN_DIR/gau" "$DOMAIN" 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/gau_js.out" || true; }
-_JS_WAYBACK()   { "$BIN_DIR/waybackurls" "$DOMAIN" 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/wayback_js.out" || true; }
-_JS_KATANA()    { echo "$DOMAIN" | "$BIN_DIR/katana" -js-only -silent 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/katana_js.out" || true; }
-_JS_HAKRAWLER() { echo "$DOMAIN" | "$BIN_DIR/hakrawler" -silent -js 2>/dev/null | grep -iE '\.js$' | sort -u > "$JS_DIR/hakrawler_js.out" || true; }
+# Four sources, run one at a time. gau/waybackurls mine archives (passive);
+# katana/hakrawler actively CRAWL live hosts. Each ends in `|| true`: a domain
+# with no .js makes `grep` exit 1, which under `set -o pipefail` would otherwise
+# abort the whole scan.
+#
+# JS URL MATCH (`_JS_RE`): `\.js` optionally followed by `?query`, `#fragment`,
+# or end-of-URL. The old pattern was `\.js$`, which anchored at end-of-line and
+# so silently DROPPED every cache-busted `app.js?v=123` / `main.chunk.js?1` —
+# i.e. most real-world JS URLs. `.json` still does not match.
+#
+# INPUT FORM:
+#   * gau/waybackurls take a plain apex (BASE_DOMAIN). gau's --subs and
+#     waybackurls' default already widen to subdomains; a starred target would
+#     become the nonsense "*.*.example.com", so never pass "*.example.com".
+#   * the CRAWLERS take real URLs. They are seeded from the live in-scope hosts
+#     under this domain (httpx's live_hosts.txt, already out-of-scope-filtered),
+#     falling back to the apex when httpx has produced nothing yet. Crawling the
+#     apex alone is why they used to return ~nothing: it often redirects or
+#     carries little JS, while the JS lives on the subdomains.
+#
+# FLAGS (both were wrong before and made the crawlers no-op with
+# "flag provided but not defined"):
+#   * katana: `-jc` (parse/crawl endpoints in JS) + `-list`, NOT `-js-only`.
+#   * hakrawler: `-u -subs -insecure -d`, NOT `-js -silent` (which don't exist).
+# Safe-mode rate limiting, a per-URL timeout and SCOUT_UA are added in COLLECT_JS.
+_JS_RE='\.js([?#]|$)'
+
+_JS_GAU()       { "$BIN_DIR/gau" --subs "$BASE_DOMAIN" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/gau_js.out" || true; }
+_JS_WAYBACK()   { echo "$BASE_DOMAIN" | "$BIN_DIR/waybackurls" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/wayback_js.out" || true; }
+_JS_KATANA()    { "$BIN_DIR/katana" -list "$JS_SEEDS" -jc -silent -d "${SCOUT_KATANA_DEPTH:-3}" \
+                    "${KATANA_ARGS[@]}" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/katana_js.out" || true; }
+_JS_HAKRAWLER() { "$BIN_DIR/hakrawler" -u -subs -insecure -d "${SCOUT_HAKRAWLER_DEPTH:-2}" \
+                    "${HAKRAWLER_ARGS[@]}" < "$JS_SEEDS" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/hakrawler_js.out" || true; }
 
 COLLECT_JS(){
   RAW_DIR="$OUTPUT_DIR/js"
   mkdir -p "$RAW_DIR"
 
   local RUNNERS=(_JS_GAU _JS_WAYBACK _JS_KATANA _JS_HAKRAWLER)
-  local RUNNER PID PIDS
+  local RUNNER
+
+  # wildcards_base.txt, not wildcards_all.txt: the base list is the star-free
+  # one every stage is allowed to read. Guard the file before the redirect —
+  # `done < ""` (both vars empty, i.e. no usable wildcards) is not a no-op under
+  # `set -e`, it aborts the whole run with "ambiguous redirect".
+  local WC_FILE="${INPUT_WILDCARD_BASE_FILE:-${INPUT_WILDCARD_ALL_FILE:-}}"
+  if [[ -z "$WC_FILE" || ! -f "$WC_FILE" ]]; then
+    WARN "No wildcard targets to collect JS for."
+    return 0
+  fi
+
+  # Active-crawler tuning (shared by every domain). NOT `local`: bash uses
+  # dynamic scope, but keeping these visible to the _JS_* wrappers is clearer as
+  # plain assignments. Safe mode rate-limits and bounds concurrency; SCOUT_UA
+  # identifies the crawler to the target.
+  local LIVE_FEED="${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}"
+  KATANA_ARGS=(-timeout 10)
+  HAKRAWLER_ARGS=(-timeout 10)
+  if [[ "${SCOUT_SAFE:-1}" == "1" ]]; then
+    KATANA_ARGS+=(-rl "${SCOUT_KATANA_RL:-50}" -c "${SCOUT_KATANA_CONC:-10}")
+    HAKRAWLER_ARGS+=(-t "${SCOUT_HAKRAWLER_THREADS:-5}")
+  else
+    HAKRAWLER_ARGS+=(-t "${SCOUT_HAKRAWLER_THREADS:-8}")
+  fi
+  [[ -n "${SCOUT_UA:-}" ]] && KATANA_ARGS+=(-H "User-Agent: ${SCOUT_UA}")
+  [[ -n "${SCOUT_UA:-}" ]] && HAKRAWLER_ARGS+=(-h "User-Agent: ${SCOUT_UA}")
 
   while read -r DOMAIN; do
     DOMAIN="${DOMAIN//[[:space:]]/}"
     [[ -z "$DOMAIN" ]] && continue
-    INFO "Collecting JS files for $DOMAIN"
+    # Same gate as every other stage; see the INPUT FORM note above.
+    if ! BASE_DOMAIN=$(PREP_TARGET "$DOMAIN"); then
+      WARN "Skipping '$DOMAIN': not a usable domain."
+      continue
+    fi
+    INFO "Collecting JS files for $BASE_DOMAIN"
     JS_DIR="$RAW_DIR/$(SAFE_NAME "$DOMAIN")"
     mkdir -p "$JS_DIR"
-    export DOMAIN JS_DIR
 
-    PIDS=()
+    # Build the crawler seed list: live in-scope URLs whose host is BASE_DOMAIN
+    # or a subdomain of it, capped so a huge live set can't turn into a crawl
+    # flood (SCOUT_JS_CRAWL_LIMIT). Fall back to the apex when httpx has none.
+    JS_SEEDS="$JS_DIR/_seeds.txt"
+    : > "$JS_SEEDS"
+    if [[ -s "$LIVE_FEED" ]]; then
+      local _esc="${BASE_DOMAIN//./\\.}"
+      grep -iE "^https?://([a-z0-9._-]+\.)?${_esc}([/:]|$)" "$LIVE_FEED" 2>/dev/null \
+        | sort -u | head -n "${SCOUT_JS_CRAWL_LIMIT:-50}" > "$JS_SEEDS" || true
+    fi
+    [[ -s "$JS_SEEDS" ]] || echo "https://$BASE_DOMAIN" > "$JS_SEEDS"
+    export DOMAIN BASE_DOMAIN JS_DIR JS_SEEDS
+
+    # One at a time; `|| true` because a direct call (unlike `wait`) lets a
+    # non-zero exit abort the run under `set -e`.
     for RUNNER in "${RUNNERS[@]}"; do
-      "$RUNNER" &
-      PIDS+=("$!")
+      local tname cfile ccmd seeds_n
+      seeds_n="$(COUNT_LINES "$JS_SEEDS")"
+      case "$RUNNER" in
+        _JS_GAU)       tname="gau (js)";        cfile="$JS_DIR/gau_js.out";       ccmd="gau --subs $BASE_DOMAIN | grep js";;
+        _JS_WAYBACK)   tname="waybackurls (js)"; cfile="$JS_DIR/wayback_js.out";   ccmd="waybackurls (<<< $BASE_DOMAIN) | grep js";;
+        _JS_KATANA)    tname="katana (js)";     cfile="$JS_DIR/katana_js.out";    ccmd="katana -list <$seeds_n seed(s)> -jc -d ${SCOUT_KATANA_DEPTH:-3} | grep js";;
+        _JS_HAKRAWLER) tname="hakrawler (js)";  cfile="$JS_DIR/hakrawler_js.out"; ccmd="hakrawler -u -subs -d ${SCOUT_HAKRAWLER_DEPTH:-2} (<$seeds_n seed(s)) | grep js";;
+        *)             tname="${RUNNER#_JS_}";  cfile=""; ccmd="$RUNNER";;
+      esac
+      START_SPINNER "${RUNNER#_JS_} on $BASE_DOMAIN"
+      "$RUNNER" || true
+      STOP_SPINNER
+      OK "${RUNNER#_JS_} done (${ELAPSED}s, $(COUNT_LINES "$cfile") js)"
+      REC_TOOL "$tname" "${ELAPSED:-0}" "$(COUNT_LINES "$cfile")" "$ccmd"
     done
-    START_SPINNER "Running ${#RUNNERS[@]} JS collection tools in parallel on $DOMAIN"
-    for PID in "${PIDS[@]}"; do
-      wait "$PID" || true
-    done
-    STOP_SPINNER
-  done < "$INPUT_WILDCARD_ALL_FILE"
+  done < "$WC_FILE"
 
   # after all tools finished for all domains, combine into single file
   ALL_JS_FILE="$RAW_DIR/all_js_files.out"
-  cat "$RAW_DIR"/*/*_js.out 2>/dev/null | sort -u > "$ALL_JS_FILE" || true
+  CAT_LINES "$RAW_DIR"/*/*_js.out | sort -u > "$ALL_JS_FILE" || true
+  # Drop JS URLs on out-of-scope hosts (-xc/-xf) before analyze_js fetches them.
+  EXCLUDE_URLS "$ALL_JS_FILE" "${EXCLUDE_ALL_FILE:-}"
   OK "Collected all JS files -> $ALL_JS_FILE ($(COUNT_LINES "$ALL_JS_FILE") URLs)"
 }

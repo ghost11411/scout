@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$' \t\n'
+
+# ---------------- SUBDOMAIN TAKEOVER (subzy, nuclei fallback) ----------------
+# A dangling DNS record (CNAME to a de-provisioned S3 bucket, Heroku app, GitHub
+# Pages site, ...) lets an attacker claim the host — one of the highest-signal,
+# most consistently in-scope bug-bounty findings, and a step every methodology
+# calls out (TBHM's "check CNAMEs for takeover"; the Notion notes list
+# subjack/subover/subzy/dnstake/mx-takeover). scout had no stage for it; this is
+# it.
+#
+# ACTIVE: subzy fetches each host and matches provider fingerprints, so it sends
+# real HTTP requests. Consistent with the default-safe posture, it is opt-in via
+# SCOUT_TAKEOVER=1. It reads the resolved host list (final_subdomains.out), which
+# has already had the out-of-scope exclusions applied, so nothing excluded is
+# ever probed.
+#
+# subzy is preferred (purpose-built, low-noise). If it is not installed, fall
+# back to nuclei's takeover template class, which every install already has.
+TAKEOVER(){
+  local IN="${TAKEOVER_INPUT:-$OUTPUT_DIR/final_subdomains.out}"
+  local TDIR="$OUTPUT_DIR/takeover"
+  mkdir -p "$TDIR"
+  local OUT="$TDIR/takeovers.txt"
+
+  if [[ ! -s "$IN" ]]; then
+    WARN "No hosts for subdomain-takeover check."
+    return 0
+  fi
+
+  local SB; SB="$(TOOL_PATH subzy || true)"
+  if [[ -n "$SB" ]]; then
+    START_SPINNER "subzy takeover check over $(COUNT_LINES "$IN") host(s)"
+    # subzy's CLI has shifted across versions: modern builds use
+    # `subzy run --targets <file>`, older ones took `--targets` at top level.
+    # Try the modern form, fall back to the old one; both best-effort.
+    if ! "$SB" run --targets "$IN" --hide_fails --output "$TDIR/subzy.json" > "$OUT" 2>/dev/null; then
+      "$SB" --targets "$IN" --hide_fails > "$OUT" 2>/dev/null || true
+    fi
+    STOP_SPINNER
+    # subzy prints one line per host; the confirmed ones are marked VULNERABLE.
+    local VULN; VULN=$(grep -ic 'VULNERABLE' "$OUT" 2>/dev/null || true)
+    [[ -n "${VULN//[^0-9]/}" ]] || VULN=0
+    if (( VULN > 0 )); then
+      OK "subzy: $VULN potential takeover(s) -> $OUT"
+    else
+      INFO "subzy: no takeovers flagged."
+    fi
+    REC_TOOL "subzy" "${ELAPSED:-0}" "$VULN" "subzy run --targets final_subdomains.out --hide_fails"
+    return 0
+  fi
+
+  # --- fallback: nuclei takeover templates ---
+  local NB; NB="$(TOOL_PATH nuclei || true)"
+  if [[ -z "$NB" ]]; then
+    WARN "Neither subzy nor nuclei installed — skipping takeover check (run 'scout install --update')."
+    return 0
+  fi
+  local FEED="${HTTP_LIVE:-$OUTPUT_DIR/http/live_hosts.txt}"
+  [[ -s "$FEED" ]] || FEED="$IN"
+  local JOUT="$TDIR/nuclei_takeover.jsonl"
+  local UA_ARG=(); [[ -n "${SCOUT_UA:-}" ]] && UA_ARG=(-header "User-Agent: ${SCOUT_UA}")
+  START_SPINNER "nuclei takeover templates over $(COUNT_LINES "$FEED") host(s)"
+  "$NB" -l "$FEED" -tags takeover -no-color -silent -jsonl -o "$JOUT" \
+    "${UA_ARG[@]}" > /dev/null 2>&1 || true
+  STOP_SPINNER
+  local VULN; VULN=$(COUNT_LINES "$JOUT")
+  if (( VULN > 0 )); then
+    OK "nuclei takeover: $VULN finding(s) -> $JOUT"
+  else
+    INFO "nuclei takeover: no findings."
+  fi
+  REC_TOOL "nuclei (takeover)" "${ELAPSED:-0}" "$VULN" "nuclei -l live_hosts.txt -tags takeover -jsonl"
+  return 0
+}
