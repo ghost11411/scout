@@ -135,8 +135,14 @@ ASK() {
   # The prompt goes to the terminal, NOT stdout: callers use $(ASK ...), and
   # stdout there is the captured answer — a prompt printed to it would be
   # swallowed into the reply and never seen by the user.
-  printf "%s" "$PROMPT" > /dev/tty 2>/dev/null || printf "%s" "$PROMPT" >&2
-  read -r REPLY < /dev/tty 2>/dev/null || REPLY=""
+  #
+  # `2>/dev/null` comes BEFORE the /dev/tty redirection on purpose. Bash applies
+  # redirections left to right, so with the usual `> /dev/tty 2>/dev/null` the
+  # open is attempted while stderr is still live and a missing controlling
+  # terminal prints "/dev/tty: No such device or address" before the suppression
+  # takes effect — twice, right in the middle of the uninstall confirmation.
+  printf "%s" "$PROMPT" 2>/dev/null > /dev/tty || printf "%s" "$PROMPT" >&2
+  read -r REPLY 2>/dev/null < /dev/tty || REPLY=""
   printf '%s' "$REPLY"
 }
 
