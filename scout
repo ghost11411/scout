@@ -132,26 +132,38 @@ while [[ $# -gt 0 ]]; do
 
         ACTION="${2:-}"
 
+        # Both spellings are accepted: USAGE documents these actions WITHOUT
+        # dashes ("actions: update | force | uninstall"), but only the dashed
+        # forms used to match here — so every documented invocation fell
+        # through to the catch-all, ran a plain install, and died with
+        # "/opt/scout already exists". An unrecognised action is now an error
+        # rather than a silent default install, so a typo says so instead of
+        # quietly doing something else.
         case "$ACTION" in
-            --force)
+            force|--force)
                 INFO "Running forced reinstallation..."
                 bash "$CONFIGURE" --force
                 exit 0
                 ;;
-            --update)
+            update|--update)
                 INFO "Running update..."
                 bash "$CONFIGURE" --update
                 exit 0
                 ;;
-            --uninstall)
+            uninstall|--uninstall)
                 INFO "Running uninstallation..."
                 bash "$CONFIGURE" --uninstall
                 exit 0
                 ;;
-            *)
+            "")
                 INFO "Running default installation..."
                 bash "$CONFIGURE"
                 exit 0
+                ;;
+            *)
+                ERR "Unknown install action: $ACTION"
+                INFO "Valid actions: update | force | uninstall (or --update/--force/--uninstall)"
+                exit 1
                 ;;
         esac
         ;;
