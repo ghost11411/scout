@@ -2,12 +2,39 @@
 set -euo pipefail
 IFS=$' \t\n'
 
+# Scout bootstrap installer.
+#
+# Supports exactly two invocation modes, and must keep working in both:
+#
+#   1. REMOTE  — curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash
+#                Nothing is on disk yet. The source is cloned from REPO_URL.
+#   2. LOCAL   — git clone ... && cd scout && sudo ./configure
+#                Installs the checkout you are standing in, so `./configure`
+#                installs the code you are actually editing.
+#
+# The two modes differ in ways that have broken this script before, so they are
+# named explicitly (RUN_MODE) rather than inferred ad hoc at each call site:
+#
+#   * Under `curl | bash` the script is NOT a file. $0 is "bash" and the source
+#     arrived on stdin, which bash has already consumed. Anything that re-execs
+#     "$0" (the old REQUIRE_ROOT did) re-runs an empty shell instead of this
+#     script — see REQUIRE_ROOT for how root is obtained in that mode.
+#   * Under `curl | bash` stdin is the script, not a terminal, so every prompt
+#     must read from /dev/tty.
+#
+# This file must stay SELF-CONTAINED: it cannot source cmd/lib, because in
+# remote mode the repo does not exist yet when this runs.
+
 # ---------------- COLORS ----------------
 BLUE="\e[94m"; GREEN="\e[92m"; YELLOW="\e[93m"; RED="\e[91m"; RESET="\e[0m"; BOLD="\e[1m"; CYAN="\033[0;36m"; HIGH_GREEN="\e[38;5;82m"
 
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
+BRANCH="main"
+# Canonical URL of THIS script, used to re-fetch it when re-execing under sudo
+# in remote mode (where there is no local file to re-exec).
+SELF_URL="https://raw.githubusercontent.com/ghost11411/scout/${BRANCH}/configure"
 # Hardcoded install locations — absolute literals, independent of $HOME.
 INSTALL_DIR="/opt/scout"
 WORKSPACE_DIR="/opt/scout/workspace"
@@ -15,12 +42,43 @@ FORCE=0
 UPDATE=0
 UNINSTALL=0
 ASSUME_YES=0
+WORKSPACE_BACKUP=""
 
 # ---------------- LOGGING ----------------
 OK()   { printf "${GREEN}[✓] %s${RESET}\n" "$1"; }
 INFO() { printf "${BLUE}[*] %s${RESET}\n" "$1"; }
 WARN() { printf "${YELLOW}[!] %s${RESET}\n" "$1"; }
 ERR()  { printf "${RED}[X] %s${RESET}\n" "$1" >&2; }
+
+# ---------------- INVOCATION MODE ----------------
+# SELF_FILE is this script's path when it exists as a real file, empty under
+# `curl | bash`. Resolved before anything can chdir.
+#
+# `[[ -f $0 ]]` alone is not enough: under a pipe $0 is the literal string
+# "bash", which would false-positive if the working directory happened to
+# contain a file named "bash". Requiring the resolved file to contain this
+# script's own marker line makes the test exact.
+SELF_FILE=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  _CAND="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+  if [[ -n "$_CAND" && -f "$_CAND" && -r "$_CAND" ]] && grep -q '^# Scout bootstrap installer\.$' "$_CAND" 2>/dev/null; then
+    SELF_FILE="$_CAND"
+  fi
+fi
+unset _CAND
+
+# SELF_DIR: the checkout this script lives in (empty in remote mode).
+SELF_DIR=""
+[[ -n "$SELF_FILE" ]] && SELF_DIR="$(cd "$(dirname "$SELF_FILE")" 2>/dev/null && pwd || true)"
+
+# A local checkout is usable as the install source only if it actually carries
+# the payload (cmd/installer) and is not already the install dir itself.
+HAVE_LOCAL_SOURCE=0
+if [[ -n "$SELF_DIR" && -f "$SELF_DIR/cmd/installer" && "$SELF_DIR" != "$INSTALL_DIR" ]]; then
+  HAVE_LOCAL_SOURCE=1
+fi
+
+if (( HAVE_LOCAL_SOURCE )); then RUN_MODE="local"; else RUN_MODE="remote"; fi
 
 # ---------------- BANNER ----------------
 BANNER(){
@@ -57,78 +115,193 @@ EOF
 }
 
 # ---------------- CLEAN EXIT ----------------
-trap 'ERR "Installation interrupted"; exit 1' INT TERM
+# Restore any stashed workspace before dying, so an interrupt mid-reinstall
+# cannot strand the user's scan results in a temp directory.
+CLEANUP_ON_SIGNAL() {
+  ERR "Installation interrupted"
+  WORKSPACE_RESTORE
+  exit 1
+}
+trap CLEANUP_ON_SIGNAL INT TERM
+
+# ---------------- PROMPTS ----------------
+# Read one line from the terminal. Under `curl | bash` stdin is the script
+# itself, so a bare `read` would consume the script's own remaining bytes (or
+# return EOF instantly); /dev/tty is the only reliable source. With no
+# controlling tty at all (CI) the open fails and the answer is empty, which
+# every caller must treat as "no".
+ASK() {
+  local PROMPT="$1" REPLY=""
+  # The prompt goes to the terminal, NOT stdout: callers use $(ASK ...), and
+  # stdout there is the captured answer — a prompt printed to it would be
+  # swallowed into the reply and never seen by the user.
+  printf "%s" "$PROMPT" > /dev/tty 2>/dev/null || printf "%s" "$PROMPT" >&2
+  read -r REPLY < /dev/tty 2>/dev/null || REPLY=""
+  printf '%s' "$REPLY"
+}
 
 # ---------------- PRIVILEGES ----------------
-# Scout installs into /opt/scout (root-owned) and runs as root, so the installer
-# requires root. MAYBE_SUDO mirrors the cmd/lib helper (empty when already root).
+# MAYBE_SUDO prints "sudo" when not already root and sudo exists, else nothing.
 MAYBE_SUDO() {
   (( EUID == 0 )) && return 0
   command -v sudo >/dev/null 2>&1 && printf 'sudo'
   return 0
 }
-# REQUIRE_ROOT enforces root: error, prompt for the password, and re-exec the
-# whole configure invocation under `sudo -E` (preserving SCOUT_REINSTALL etc.),
-# then proceed. Mirrors the cmd/lib version, which configure cannot source (it
-# must stay self-contained to run via `curl | bash`). Call as REQUIRE_ROOT "$@".
+
+# REQUIRE_ROOT enforces root, re-execing under `sudo -E` (which preserves
+# SCOUT_REINSTALL and friends) and forwarding the original arguments.
+#
+# How the re-exec happens depends on the invocation mode, and getting this
+# wrong is silent: in remote mode there is NO file to re-exec. $0 is "bash" and
+# the script came from stdin, which bash has already read to EOF — so the old
+# `exec sudo -E -- "$0" "$@"` handed sudo a bare `bash` with an empty stdin and
+# simply exited 0 without installing anything. In that mode we re-download this
+# script to a temp file and exec THAT under sudo instead.
 REQUIRE_ROOT() {
   (( EUID == 0 )) && return 0
-  ERR "This installer must be run as root."
-  if command -v sudo >/dev/null 2>&1; then
-    INFO "Re-running as root via sudo (you may be prompted for your password)..."
-    exec sudo -E -- "$0" "$@"
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    ERR "This installer must be run as root, and sudo is not available."
+    ERR "Re-run as root:  su -c 'curl -sL ${SELF_URL} | bash'"
+    exit 1
   fi
-  ERR "sudo is not available — re-run this command as root."
-  exit 1
+
+  INFO "Root is required — re-running under sudo (you may be prompted for your password)..."
+
+  if [[ -n "$SELF_FILE" ]]; then
+    # Local mode: a real file exists, so just re-exec it.
+    exec sudo -E -- bash "$SELF_FILE" "$@"
+  fi
+
+  # Remote mode: materialise this script on disk, then re-exec that copy.
+  if ! command -v curl >/dev/null 2>&1; then
+    ERR "curl is required to re-run under sudo. Use:  curl -sL ${SELF_URL} | sudo bash"
+    exit 1
+  fi
+  local TMP
+  TMP="$(mktemp)" || { ERR "Could not create a temp file for the sudo re-exec."; exit 1; }
+  if ! curl -fsSL -o "$TMP" "$SELF_URL"; then
+    rm -f "$TMP"
+    ERR "Could not re-download the installer from ${SELF_URL}"
+    ERR "Re-run it yourself as root:  curl -sL ${SELF_URL} | sudo bash"
+    exit 1
+  fi
+  # SCOUT_SELF_TMP tells the re-exec'd copy to delete itself when done; it
+  # cannot remove the file while still executing it.
+  SCOUT_SELF_TMP="$TMP" exec sudo -E -- bash "$TMP" "$@"
 }
 
+# Remove the temp copy of ourselves left behind by the remote-mode re-exec.
+CLEAN_SELF_TMP() {
+  [[ -n "${SCOUT_SELF_TMP:-}" && -f "${SCOUT_SELF_TMP}" ]] && rm -f "${SCOUT_SELF_TMP}"
+  return 0
+}
+trap CLEAN_SELF_TMP EXIT
+
 # ---------------- DEP CHECK ----------------
+# git and curl are needed before cmd/installer ever runs (to fetch the source),
+# so they cannot be left to the installer's APT stage. On a bare system — the
+# exact case `curl | bash` exists for — install them rather than bailing out.
 CHECK_DEPS() {
-  for cmd in git curl; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-      ERR "Missing dependency: $cmd"
-      exit 1
-    fi
+  local MISSING=()
+  for CMD in git curl; do
+    command -v "$CMD" >/dev/null 2>&1 || MISSING+=("$CMD")
   done
+  (( ${#MISSING[@]} == 0 )) && return 0
+
+  INFO "Installing missing prerequisite(s): ${MISSING[*]}"
+  if command -v apt-get >/dev/null 2>&1; then
+    $(MAYBE_SUDO) apt-get update -y -qq > /dev/null 2>&1 || true
+    $(MAYBE_SUDO) apt-get install -y -qq --no-install-recommends "${MISSING[@]}" > /dev/null 2>&1 || true
+  fi
+
+  local STILL=()
+  for CMD in "${MISSING[@]}"; do
+    command -v "$CMD" >/dev/null 2>&1 || STILL+=("$CMD")
+  done
+  if (( ${#STILL[@]} > 0 )); then
+    ERR "Missing dependency: ${STILL[*]} — install it and re-run."
+    exit 1
+  fi
+  OK "Prerequisites installed"
 }
 
 # ---------------- HELP ----------------
 USAGE() {
 cat <<EOF
-Usage: configure [--force] [--update] [--uninstall] [--yes] [--version]
+Scout installer ${VER}
+
+Usage:
+  Remote:  curl -sL ${SELF_URL} | bash
+           curl -sL ${SELF_URL} | bash -s -- --force
+  Local:   git clone ${REPO_URL} && cd scout && sudo ./configure
+
+Options:
   --force       Remove and reinstall (scan results in workspace/ are preserved)
-  --update      Pull latest changes
+  --update      Update to the latest source and re-run the installer
   --uninstall   Remove everything, INCLUDING scan results in workspace/
   --yes         Skip the uninstall confirmation prompt (for scripted use)
   --version     Show installer version
   --help, -h    Show this help
+
+Note: running without root re-execs under sudo automatically.
+In remote mode, pass flags after '-s --' as shown above; 'bash --force'
+would otherwise be read as a flag for bash itself.
 EOF
 }
 
-# ---------------- INSTALL STEPS ----------------
-# Where this configure actually lives. When run from a local checkout (`sudo
-# ./configure`), SELF_DIR is that checkout; when run via `curl | bash`, $0 is not
-# a real file and SELF_DIR resolves to something without a cmd/installer.
-SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd || true)"
+# ---------------- WORKSPACE PRESERVATION ----------------
+# workspace/ (every past scan result) lives INSIDE INSTALL_DIR, so any
+# reinstall that wipes INSTALL_DIR must move it aside first and put it back
+# after. Used by --force and by the non-git --update path.
+WORKSPACE_STASH() {
+  WORKSPACE_BACKUP=""
+  [[ -d "$WORKSPACE_DIR" ]] || return 0
+  WORKSPACE_BACKUP="$(mktemp -d)/workspace"
+  mv "$WORKSPACE_DIR" "$WORKSPACE_BACKUP"
+  INFO "Preserved existing scan results"
+}
 
-# Populate INSTALL_DIR with the source. Prefer the local checkout so `./configure`
-# installs the code you are actually editing; fall back to cloning the published
-# repo for the `curl | bash` path. (Historically this always cloned, so a local
-# `configure --force` silently reinstalled stale remote code and ignored every
-# local edit — the tools even landed in the remote's $HOME/scout paths.)
-CLONE_REPO() {
-    if [[ -n "$SELF_DIR" && -f "$SELF_DIR/cmd/installer" && "$SELF_DIR" != "$INSTALL_DIR" ]]; then
-        INFO "Installing from local checkout: $SELF_DIR"
-        mkdir -p "$INSTALL_DIR"
-        # Copy the checkout, then drop VCS/scan artifacts that must not ship into
-        # the install tree (workspace is preserved separately by --force).
-        cp -a "$SELF_DIR/." "$INSTALL_DIR/"
-        rm -rf "$INSTALL_DIR/.git" "$INSTALL_DIR/workspace"
-        OK "Installed source from local checkout"
-    else
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" --progress > /dev/null 2>&1
-        OK "Repository cloned"
+WORKSPACE_RESTORE() {
+  [[ -n "$WORKSPACE_BACKUP" && -d "$WORKSPACE_BACKUP" ]] || return 0
+  mkdir -p "$INSTALL_DIR"
+  mv "$WORKSPACE_BACKUP" "$WORKSPACE_DIR"
+  rmdir "$(dirname "$WORKSPACE_BACKUP")" 2>/dev/null || true
+  WORKSPACE_BACKUP=""
+  OK "Restored scan results to $WORKSPACE_DIR"
+}
+
+# ---------------- SOURCE INSTALL ----------------
+# Populate INSTALL_DIR with the source, from whichever origin this invocation
+# has. Local checkout wins so `./configure` installs the code you are editing;
+# historically this always cloned, so a local `configure --force` silently
+# reinstalled stale remote code and ignored every local edit.
+FETCH_SOURCE() {
+  if (( HAVE_LOCAL_SOURCE )); then
+    INFO "Installing from local checkout: $SELF_DIR"
+    mkdir -p "$INSTALL_DIR"
+    # Copy the checkout, then drop VCS/scan artifacts that must not ship into
+    # the install tree (workspace is preserved separately by the callers).
+    cp -a "$SELF_DIR/." "$INSTALL_DIR/"
+    rm -rf "$INSTALL_DIR/.git" "$INSTALL_DIR/workspace"
+    OK "Installed source from local checkout"
+  else
+    INFO "Cloning ${REPO_URL} (branch ${BRANCH})..."
+    # Clone to a temp dir and swap it in: a direct `git clone` into a path that
+    # already exists fails, and a half-written INSTALL_DIR is worse than none.
+    local TMP
+    TMP="$(mktemp -d)"
+    if ! git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TMP/scout" > /dev/null 2>&1; then
+      rm -rf "$TMP"
+      ERR "Could not clone ${REPO_URL}"
+      exit 1
     fi
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    mv "$TMP/scout" "$INSTALL_DIR"
+    rm -rf "$TMP"
+    OK "Repository cloned"
+  fi
 }
 
 RUN_INSTALLER() {
@@ -139,6 +312,50 @@ RUN_INSTALLER() {
     # own, and REQUIRE_ROOT re-execs with `sudo -E`, so the env var survives).
     (( FORCE )) && export SCOUT_REINSTALL=1
     bash "$INSTALL_DIR/cmd/installer"
+}
+
+# Reinstall the tree from source, keeping scan results. This is --force:
+# it DELETES INSTALL_DIR, so everything the installer built (tools/ — 30+
+# compiled Go binaries, the ~14k nuclei templates, every wordlist) is rebuilt
+# from scratch. Only --force should do that.
+REINSTALL_FROM_SOURCE() {
+    WORKSPACE_STASH
+    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Old install removed"
+    FETCH_SOURCE
+    WORKSPACE_RESTORE
+    RUN_INSTALLER
+}
+
+# Refresh ONLY the source files of an existing install, leaving everything the
+# installer built in place. This is --update on a tree with no .git.
+#
+# It must not go through REINSTALL_FROM_SOURCE: an update is meant to pull the
+# latest code "without removing local files", and wiping INSTALL_DIR would
+# throw away tools/ and force a full rebuild of binaries and templates that
+# have not changed. tools/ and workspace/ do not exist in the checkout, so
+# copying the source over the top updates the code and leaves them untouched.
+#
+# The trade-off: a file deleted upstream lingers here until a --force. That is
+# the right trade for an update, and --force remains the clean-slate option.
+REFRESH_SOURCE_IN_PLACE() {
+    if (( HAVE_LOCAL_SOURCE )); then
+        INFO "Refreshing source from local checkout: $SELF_DIR"
+        cp -a "$SELF_DIR/." "$INSTALL_DIR/"
+        rm -rf "$INSTALL_DIR/.git"
+    else
+        INFO "Refreshing source from ${REPO_URL} (branch ${BRANCH})..."
+        local TMP
+        TMP="$(mktemp -d)"
+        if ! git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TMP/scout" > /dev/null 2>&1; then
+            rm -rf "$TMP"
+            ERR "Could not clone ${REPO_URL}"
+            exit 1
+        fi
+        rm -rf "$TMP/scout/.git"
+        cp -a "$TMP/scout/." "$INSTALL_DIR/"
+        rm -rf "$TMP"
+    fi
+    OK "Source refreshed (installed tools and scan results kept)"
 }
 
 # ---------------- PARSE FLAGS ----------------
@@ -156,6 +373,7 @@ done
 
 # ---------------- MAIN ----------------
 BANNER
+INFO "Install mode: ${RUN_MODE} ($( (( HAVE_LOCAL_SOURCE )) && echo "source: $SELF_DIR" || echo "source: $REPO_URL" ))"
 # Enforce root for every real operation (install/update/force/uninstall). Version
 # and help are handled during argument parsing above and exit before reaching
 # here, so they still work without root.
@@ -170,12 +388,9 @@ if (( UNINSTALL )); then
         RESULT_COUNT=$(find "$WORKSPACE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
         WARN "This will permanently delete ${RESULT_COUNT} scan result director(ies) in:"
         WARN "  $WORKSPACE_DIR"
-        printf "Type 'yes' to continue: "
-        # 2>/dev/null: with no controlling tty (CI, curl | bash) the open
-        # fails, and REPLY stays empty so we abort — but without printing a
-        # confusing "/dev/tty: No such device or address" first.
-        read -r REPLY < /dev/tty 2>/dev/null || REPLY=""
-        if [[ "$REPLY" != "yes" ]]; then
+        # No tty (CI, or a pipe with no terminal) yields an empty answer, which
+        # aborts — deleting scan results must never happen by default.
+        if [[ "$(ASK "Type 'yes' to continue: ")" != "yes" ]]; then
             ERR "Aborted. Nothing was removed."
             exit 1
         fi
@@ -199,37 +414,47 @@ fi
 # ---------------- FORCE INSTALL ----------------
 if (( FORCE )); then
     WARN "--force: Removing old installation..."
-    # Preserve scan results across the wipe — they live under INSTALL_DIR.
-    WORKSPACE_BACKUP=""
-    if [[ -d "$WORKSPACE_DIR" ]]; then
-        WORKSPACE_BACKUP="$(mktemp -d)/workspace"
-        mv "$WORKSPACE_DIR" "$WORKSPACE_BACKUP"
-        INFO "Preserved existing scan results"
-    fi
-    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR" && OK "Old install removed"
-    INFO "Cloning fresh repository..."
-    CLONE_REPO
-    if [[ -n "$WORKSPACE_BACKUP" && -d "$WORKSPACE_BACKUP" ]]; then
-        mv "$WORKSPACE_BACKUP" "$WORKSPACE_DIR"
-        rmdir "$(dirname "$WORKSPACE_BACKUP")" 2>/dev/null || true
-        OK "Restored scan results to $WORKSPACE_DIR"
-    fi
-    RUN_INSTALLER
+    REINSTALL_FROM_SOURCE
+
 # ---------------- UPDATE ----------------
 elif (( UPDATE )); then
     if [[ -d "$INSTALL_DIR/.git" ]]; then
+        # Clone-based install: update in place.
         INFO "Updating existing install..."
         (cd "$INSTALL_DIR" && git reset --hard > /dev/null 2>&1 && git pull --rebase --autostash > /dev/null 2>&1)
         OK "Repository updated"
         RUN_INSTALLER
         OK "Update complete."
+    elif [[ -d "$INSTALL_DIR" ]]; then
+        # No .git — which is the NORMAL state for an install made from a local
+        # checkout, because FETCH_SOURCE strips .git from the install tree.
+        # The old code refused here ("not a git repo – use --force"), making
+        # --update permanently unusable for local installs. Refresh the source
+        # over the top instead, which keeps tools/ and workspace/ intact.
+        INFO "Install has no git metadata (installed from a local checkout)"
+        REFRESH_SOURCE_IN_PLACE
+        RUN_INSTALLER
+        OK "Update complete."
     else
-        WARN "$INSTALL_DIR is not a git repo – use --force to reinstall."
+        WARN "Nothing installed at $INSTALL_DIR — installing fresh..."
+        FETCH_SOURCE
+        RUN_INSTALLER
     fi
+
 # ---------------- DEFAULT INSTALL ----------------
 else
-    [[ -d "$INSTALL_DIR" ]] && { ERR "$INSTALL_DIR already exists. Use --force or --update."; echo ''; exit 1; }
-    INFO "Fresh install – cloning repository..."
-    CLONE_REPO
+    if [[ -d "$INSTALL_DIR" ]]; then
+        ERR "$INSTALL_DIR already exists."
+        INFO "Use --force to reinstall it, or --update to refresh it:"
+        if [[ "$RUN_MODE" == "remote" ]]; then
+            INFO "  curl -sL ${SELF_URL} | bash -s -- --force"
+        else
+            INFO "  sudo ./configure --force"
+        fi
+        echo ''
+        exit 1
+    fi
+    INFO "Fresh install..."
+    FETCH_SOURCE
     RUN_INSTALLER
 fi

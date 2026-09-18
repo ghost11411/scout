@@ -156,12 +156,48 @@ find "$INSTALL_DIR/cmd" -type f -exec chmod +x {} + 2>/dev/null || true
 echo -e "${BOLD}${GREEN}=====================================================${RESET}"
 INFO "Installing and Updating APT packages..."
 START_SPINNER "Installing APT packages${SUDO:+ (via sudo)}"
-if { $SUDO apt-get update -y -qq && $SUDO apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; } > /dev/null 2>&1; then
+# `update` is best-effort and deliberately NOT chained to `install` with &&.
+# A single broken third-party repo (an expired or missing signing key in
+# /etc/apt/sources.list.d/) makes `apt-get update` exit non-zero, and when the
+# two were chained that skipped EVERY package install — including golang-go,
+# pipx and build-essential — leaving nothing but a warning. The packages
+# themselves install fine from the working repos in that situation, so only
+# `install` decides whether this step succeeded.
+$SUDO apt-get update -y -qq > /dev/null 2>&1 || APT_UPDATE_FAILED=1
+if $SUDO apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}" > /dev/null 2>&1; then
   STOP_SPINNER
   OK "APT packages installed in (${ELAPSED}s)"
+  # Still say something when the index was stale: it means the versions just
+  # installed may be older than the repos actually offer.
+  [[ -n "${APT_UPDATE_FAILED:-}" ]] && \
+    WARN "'apt-get update' failed (broken/unsigned repo?) — packages installed from the existing index"
 else
   STOP_SPINNER
   WARN "APT package installation failed (${ELAPSED}s) — some tools may not build correctly"
+  # Name the packages that are actually absent, so the cause is visible instead
+  # of being inferred later from a tool that fails to build.
+  #
+  # `dpkg -s` alone is not the test: it does not resolve VIRTUAL packages, so a
+  # renamed one that is genuinely satisfied reads as missing (on current Kali
+  # `dnsutils` no longer exists as a real package and is provided by
+  # bind9-dnsutils — apt installs it happily, dpkg -s reports nothing). Fall
+  # back to asking whether any installed package Provides the name.
+  APT_MISSING=()
+  for PKG in "${APT_PACKAGES[@]}"; do
+    dpkg -s "$PKG" > /dev/null 2>&1 && continue
+    dpkg-query -W -f='${db:Status-Abbrev}|${Provides}\n' 2>/dev/null \
+      | awk -F'|' -v p="$PKG" '
+          $1 ~ /^ii/ {
+            n = split($2, A, /,/)
+            for (i = 1; i <= n; i++) {
+              gsub(/\(.*\)|[[:space:]]/, "", A[i])
+              if (A[i] == p) { found = 1; exit }
+            }
+          }
+          END { exit !found }' && continue
+    APT_MISSING+=("$PKG")
+  done
+  (( ${#APT_MISSING[@]} > 0 )) && WARN "Missing packages: ${APT_MISSING[*]}"
 fi
 
 # ---------------- GO INSTALL WITH SPINNER ----------------
@@ -256,7 +292,9 @@ INSTALL_FINDOMAIN() {
   local TMP ZIP
   TMP=$(mktemp -d)
   ZIP="$TMP/findomain.zip"
-  if curl -sL -o "$ZIP" "$URL" && unzip -q -o "$ZIP" -d "$BIN_DIR"; then
+  # -f: without it curl exits 0 on an HTTP 404 and happily writes the error body
+  # to the output file (see the wordlist loop below for the same fix).
+  if curl -sfL -o "$ZIP" "$URL" && unzip -q -o "$ZIP" -d "$BIN_DIR"; then
     chmod +x "$BIN_DIR/findomain" && STATUS="success"
   fi
   rm -rf "$TMP"
@@ -328,18 +366,62 @@ NUCLEI_COMMUNITY_REPOS=(
   "coffinxp-lostsec|https://github.com/coffinxp/nuclei-templates"
   "geeknik|https://github.com/geeknik/the-nuclei-templates"
 )
+NUCLEI_OFFICIAL_REPO="https://github.com/projectdiscovery/nuclei-templates"
+
+# Does the store actually hold official templates? This, not the presence of
+# nuclei's .checksum file, is the real "is it installed" test — see
+# NUCLEI_FETCH_OFFICIAL for why .checksum cannot be trusted. Community clones
+# live in their own subdir and must not count towards the official set.
+NUCLEI_HAS_TEMPLATES() {
+  [[ -d "$1" ]] || return 1
+  find "$1" -mindepth 2 -maxdepth 3 -name '*.yaml' -not -path '*/community/*' \
+    -print -quit 2>/dev/null | grep -q .
+}
+
+# Populate the official ProjectDiscovery set into $1 (the store), using the
+# nuclei binary $2.
+#
+# `nuclei -ud <dir> -ut` ALONE DOES NOT WORK, and silently so. nuclei records
+# the installed templates version globally in
+# ~/.config/nuclei/.templates-config.json, keyed by VERSION and not by
+# directory. When that marker already names the current version, -ut prints
+# "No new updates found" and downloads NOTHING into <dir> — leaving an empty
+# store while exiting 0. That is the normal state on any machine where nuclei
+# has ever run, and on every `configure --force`, which wipes /opt/scout but
+# not ~/.config/nuclei. The old code then looked for a .checksum that was never
+# created, so this step reported failure on every single run and
+# cmd/nuclei_scan's -automatic-scan was left pointed at an empty directory.
+#
+# So: still run -ut (it is what records <dir> as nuclei's configured template
+# directory, which -automatic-scan reads), then VERIFY the store really has
+# templates and clone the official repo when it does not.
+NUCLEI_FETCH_OFFICIAL() {
+  local DIR="$1" NB="$2" TMP
+  "$NB" -ud "$DIR" -ut > /dev/null 2>&1 || true
+  NUCLEI_HAS_TEMPLATES "$DIR" && return 0
+  # -ut was a no-op against a stale version marker: fetch the set ourselves.
+  TMP="$(mktemp -d)"
+  if git clone --depth 1 -q "$NUCLEI_OFFICIAL_REPO" "$TMP/t" > /dev/null 2>&1; then
+    rm -rf "$TMP/t/.git"
+    cp -a "$TMP/t/." "$DIR/" 2>/dev/null || true
+  fi
+  rm -rf "$TMP"
+  NUCLEI_HAS_TEMPLATES "$DIR"
+}
+
 INSTALL_NUCLEI_TEMPLATES() {
   local NB; NB="$BIN_DIR/nuclei"; [[ -x "$NB" ]] || NB="$(command -v nuclei 2>/dev/null || true)"
   if [[ -z "$NB" ]]; then STATUS="fail"; WARN "nuclei not installed — skipping template store"; return 0; fi
-  if ! NEED_INSTALL "$NUCLEI_TEMPLATES_DIR/.checksum" && \
-     [[ -d "$NUCLEI_TEMPLATES_DIR" ]]; then
-    # Refresh official set on --update, but don't re-clone community every time.
+  # Already populated (and not a forced reinstall): refresh the official set
+  # but don't re-clone community every time.
+  if [[ -z "${SCOUT_REINSTALL:-}" ]] && NUCLEI_HAS_TEMPLATES "$NUCLEI_TEMPLATES_DIR"; then
     "$NB" -ud "$NUCLEI_TEMPLATES_DIR" -ut > /dev/null 2>&1 || true
     STATUS="present"; return 0
   fi
   mkdir -p "$NUCLEI_TEMPLATES_DIR"
   # Official templates + record this dir as nuclei's template directory.
-  "$NB" -ud "$NUCLEI_TEMPLATES_DIR" -ut > /dev/null 2>&1 || true
+  NUCLEI_FETCH_OFFICIAL "$NUCLEI_TEMPLATES_DIR" "$NB" \
+    || WARN "Official nuclei templates could not be fetched"
   local CDIR="$NUCLEI_TEMPLATES_DIR/community" pair name url dst
   mkdir -p "$CDIR"
   for pair in "${NUCLEI_COMMUNITY_REPOS[@]}"; do
@@ -352,7 +434,10 @@ INSTALL_NUCLEI_TEMPLATES() {
   done
   # Strip code-protocol templates from the community clones (see SAFETY above).
   grep -rlE '^\s*-?\s*code:|^code:' "$CDIR" --include='*.yaml' 2>/dev/null | xargs -r rm -f
-  [[ -f "$NUCLEI_TEMPLATES_DIR/.checksum" ]] && STATUS="success"
+  # Key success off real templates on disk, not nuclei's .checksum: -ut skips
+  # writing that file whenever the global version marker is already current,
+  # which made this step report failure forever (see NUCLEI_FETCH_OFFICIAL).
+  NUCLEI_HAS_TEMPLATES "$NUCLEI_TEMPLATES_DIR" && STATUS="success"
   return 0
 }
 RUN_STEP "nuclei templates (official + community)" INSTALL_NUCLEI_TEMPLATES
@@ -423,11 +508,19 @@ for URL in "${WORDLISTS[@]}"; do
     continue
   fi
   START_SPINNER "Downloading $FNAME"
-  if curl -sL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
+  # -f is what makes this check mean anything: WITHOUT it curl exits 0 on an
+  # HTTP 404 and writes the 14-byte "404: Not Found" body to the file. That
+  # file is non-empty, so `[[ -s ]]`, VERIFY_INSTALL and NEED_INSTALL all pass
+  # it as a real wordlist and it is never re-fetched — the dead URL only
+  # surfaces much later as ffuf finding nothing. With -f curl exits non-zero
+  # and writes no body; rm -f clears any partial transfer so the next run
+  # retries instead of trusting a truncated list.
+  if curl -sfL -o "$WORDLISTS_DIR/$FNAME" "$URL"; then
     STOP_SPINNER
     OK "$FNAME Downloaded"
   else
     STOP_SPINNER
+    rm -f "$WORDLISTS_DIR/$FNAME"
     WARN "$FNAME Download Failed"
   fi
 done
@@ -443,7 +536,8 @@ if [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]] && ! NEED_INSTALL "$WORDLISTS_DI
   OK "DNS brute-force wordlist already present — skipped"
 else
   START_SPINNER "Downloading dns_subdomains.txt"
-  curl -sL -o "$WORDLISTS_DIR/dns_subdomains.txt" "$DNS_WORDLIST_URL" || true
+  curl -sfL -o "$WORDLISTS_DIR/dns_subdomains.txt" "$DNS_WORDLIST_URL" \
+    || rm -f "$WORDLISTS_DIR/dns_subdomains.txt"
   STOP_SPINNER
 fi
 if [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]]; then
@@ -461,7 +555,8 @@ if [[ -s "$WORDLISTS_DIR/gitdorks.txt" ]] && ! NEED_INSTALL "$WORDLISTS_DIR/gitd
   OK "GitHub dorks list already present — skipped"
 else
   START_SPINNER "Downloading gitdorks.txt"
-  curl -sL -o "$WORDLISTS_DIR/gitdorks.txt" "$GITDORKS_URL" || true
+  curl -sfL -o "$WORDLISTS_DIR/gitdorks.txt" "$GITDORKS_URL" \
+    || rm -f "$WORDLISTS_DIR/gitdorks.txt"
   STOP_SPINNER
 fi
 [[ -s "$WORDLISTS_DIR/gitdorks.txt" ]] && OK "GitHub dorks list downloaded ($(COUNT_LINES "$WORDLISTS_DIR/gitdorks.txt") dorks)" \
@@ -475,12 +570,69 @@ INFO "Downloading DNS Resolvers list..."
 if [[ -s "$RESOLVERS_FILE" ]] && ! NEED_INSTALL "$RESOLVERS_FILE"; then
   OK "Resolvers list already present — skipped (refresh with 'configure --force')"
 else
-  wget https://raw.githubusercontent.com/ghost11411/resolvers/refs/heads/main/stable_resolvers.txt -O "$RESOLVERS_FILE" -q || true
+  # The original source (ghost11411/resolvers) is gone — both the raw URL and
+  # the repo itself 404, so every install since produced a 0-byte resolvers.txt
+  # and the "Resolvers list missing" warning. It is replaced by
+  # ghost11411/resolvers-fixed, and joined by two maintained public lists.
+  #
+  # These are MERGED, not tried in order: each list is downloaded, and the
+  # union of all three — deduped, and filtered to syntactically valid IPv4 —
+  # becomes the single resolvers.txt the DNS stages read. A larger resolver
+  # pool is the point: dnsx rotates through it, so more distinct working
+  # resolvers means less rate-limiting and better resolution. The per-source
+  # downloads are temporary and deleted once merged, leaving only resolvers.txt.
+  RESOLVER_URLS=(
+    "https://raw.githubusercontent.com/ghost11411/resolvers-fixed/main/stable_resolvers.txt"
+    "https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt"
+    "https://raw.githubusercontent.com/proabiral/Fresh-Resolvers/master/resolvers.txt"
+  )
+  START_SPINNER "Downloading and merging resolver lists"
+  R_TMP="$(mktemp -d)"
+  R_PARTS=()
+  R_OK=0
+  R_FAILED=()
+  for R_URL in "${RESOLVER_URLS[@]}"; do
+    R_PART="$R_TMP/$(( ${#R_PARTS[@]} + 1 )).txt"
+    # -f so an HTTP error is a failure rather than an error page written to
+    # disk as if it were a resolver list.
+    if curl -sfL -o "$R_PART" "$R_URL" && [[ -s "$R_PART" ]]; then
+      R_PARTS+=("$R_PART")
+      R_OK=$((R_OK+1))
+    else
+      rm -f "$R_PART"
+      R_FAILED+=("${R_URL##*/} (${R_URL#https://raw.githubusercontent.com/})")
+    fi
+  done
+  if (( R_OK > 0 )); then
+    # CAT_LINES guarantees a newline between files (a list not ending in one
+    # would otherwise glue two IPs into a junk entry). The awk filter keeps
+    # only dotted-quad IPv4 with every octet <= 255, which drops comments,
+    # blank lines, CRs and anything else a third-party list might carry.
+    CAT_LINES "${R_PARTS[@]}" \
+      | tr -d '\r' \
+      | awk -F. 'NF==4 && /^[0-9]+(\.[0-9]+){3}$/ {
+          ok=1
+          for (i=1; i<=4; i++) if ($i+0 > 255 || length($i) > 3) ok=0
+          if (ok) print
+        }' \
+      | sort -u > "$RESOLVERS_FILE" 2>/dev/null || true
+  fi
+  # Delete the per-source downloads: resolvers.txt is the only list that stays.
+  rm -rf "$R_TMP"
+  STOP_SPINNER
+  (( ${#R_FAILED[@]} > 0 )) && WARN "Resolver source(s) unavailable: ${R_FAILED[*]}"
 fi
 if [[ -s "$RESOLVERS_FILE" ]]; then
-  OK "Resolvers list downloaded"
+  # R_OK is only set when the download/merge actually ran; on the "already
+  # present" path it is unset, and reporting "from 0 source(s)" there reads as
+  # a failure when nothing is wrong.
+  if [[ -n "${R_OK:-}" ]]; then
+    OK "Resolvers list ready ($(COUNT_LINES "$RESOLVERS_FILE") unique resolvers from ${R_OK} source(s))"
+  else
+    OK "Resolvers list ready ($(COUNT_LINES "$RESOLVERS_FILE") resolvers)"
+  fi
 else
-  WARN "Resolvers list download failed"
+  WARN "Resolvers list download failed — dnsx will fall back to system resolvers"
 fi
 
 # ---------------- PERMISSIONS & SYMLINKS ----------------
@@ -516,6 +668,10 @@ VERIFY_INSTALL() {
   [[ -x "$BIN_DIR/bbot" ]] || { WARN "BBOT missing"; ERRORS=$((ERRORS+1)); }
   [[ -x "$BIN_DIR/arjun" ]] || { WARN "Arjun missing (parameter discovery)"; ERRORS=$((ERRORS+1)); }
   [[ -s "$WORDLISTS_DIR/dns_subdomains.txt" ]] || { WARN "DNS brute-force wordlist missing"; ERRORS=$((ERRORS+1)); }
+  # The template store is what cmd/nuclei_scan's -automatic-scan actually reads,
+  # so an empty one is a silent no-op scan rather than a visible error.
+  NUCLEI_HAS_TEMPLATES "$NUCLEI_TEMPLATES_DIR" \
+    || { WARN "Nuclei official templates missing ($NUCLEI_TEMPLATES_DIR)"; ERRORS=$((ERRORS+1)); }
   for URL in "${WORDLISTS[@]}"; do
     FNAME=$(basename "$URL")
     [[ -s "$WORDLISTS_DIR/$FNAME" ]] || { WARN "Wordlist missing: $FNAME"; ERRORS=$((ERRORS+1)); }

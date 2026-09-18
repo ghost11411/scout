@@ -98,6 +98,25 @@ sudo apt update && sudo apt install curl -y
 curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash
 ```
 
+You do not need to prefix this with `sudo`. Scout installs into `/opt/scout` and
+needs root, so `configure` re-runs itself under `sudo` and prompts for your
+password.
+
+---
+
+## Install From A Local Clone (For Development)
+
+Installs the checkout you are standing in, rather than the published repo — use
+this when you are editing Scout itself.
+
+```bash
+git clone https://github.com/ghost11411/scout
+cd scout
+sudo ./configure
+```
+
+The same flags work here (`sudo ./configure --update`, `--force`, `--uninstall`).
+
 ---
 
 ## Install Updates (Recommended For Updating)
