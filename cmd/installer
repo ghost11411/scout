@@ -350,6 +350,49 @@ INSTALL_ARJUN() {
 }
 RUN_STEP arjun INSTALL_ARJUN
 
+# ---- FIRST-RUN SETUP (bbot, subdominator) ----
+# Both tools do real work on their FIRST invocation rather than at install time:
+# bbot writes ~/.config/bbot/{bbot.yml,secrets.yml} and installs per-module
+# dependencies, and subdominator creates its provider config and local DB.
+#
+# Left to a scan, that setup runs INSIDE cmd/collect_subdomains' timeout-bounded
+# enumeration step — it consumes the budget and the source returns nothing, with
+# no error, so it just looks like "bbot found: 0 subdomains". Do it once here,
+# where it can take as long as it needs and a failure is visible.
+INIT_FIRST_RUN() {
+  if ! NEED_INSTALL "$TOOLS_DIR/.first_run_done"; then STATUS="present"; return 0; fi
+  local OK_COUNT=0
+  # bbot: install every module's dependencies up front. Bounded generously —
+  # this pulls packages and is the slow part; the scan-time call then runs with
+  # --no-deps and spends its whole budget enumerating.
+  if [[ -x "$BIN_DIR/bbot" ]]; then
+    timeout 900 "$BIN_DIR/bbot" --install-all-deps --yes > /dev/null 2>&1 || true
+    [[ -f "$HOME/.config/bbot/bbot.yml" ]] && OK_COUNT=$((OK_COUNT+1))
+  fi
+  # subdominator: `-scp` resolves and creates its provider-config directory
+  # without scanning anything (`--help` does not — it never touches the config).
+  if [[ -x "$BIN_DIR/subdominator" ]]; then
+    timeout 120 "$BIN_DIR/subdominator" -scp > /dev/null 2>&1 || true
+    # Its provider API keys live in $HOME/.config/Subdominator. scout runs as
+    # ROOT, so a config the user already set up under their own home is
+    # invisible to it and every provider returns empty — silently. Point root's
+    # config at theirs (symlink, so their file stays the single source of truth
+    # and edits keep working). Never clobber a real file already there.
+    local SD_USER="${SUDO_USER:-$(id -un)}" SD_HOME SD_ROOT="$HOME/.config/Subdominator"
+    SD_HOME="$(getent passwd "$SD_USER" 2>/dev/null | cut -d: -f6)"
+    if [[ -n "$SD_HOME" && -f "$SD_HOME/.config/Subdominator/provider-config.yaml" \
+          && ! -e "$SD_ROOT/provider-config.yaml" ]]; then
+      mkdir -p "$SD_ROOT"
+      ln -sfn "$SD_HOME/.config/Subdominator/provider-config.yaml" \
+              "$SD_ROOT/provider-config.yaml" 2>/dev/null || true
+    fi
+    OK_COUNT=$((OK_COUNT+1))
+  fi
+  (( OK_COUNT > 0 )) && { : > "$TOOLS_DIR/.first_run_done"; STATUS="success"; }
+  return 0
+}
+RUN_STEP "bbot/subdominator first-run setup" INIT_FIRST_RUN
+
 # ---- NUCLEI TEMPLATE STORE (official + vetted community) ----
 # cmd/nuclei_scan runs -automatic-scan, which reads nuclei's CONFIGURED template
 # directory (not -t). We pin that directory to $TOOLS_DIR/nuclei-templates via

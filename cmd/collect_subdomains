@@ -29,7 +29,25 @@ _XSUBFIND3R()    { "$BIN_DIR/xsubfind3r" -d "$BASE_DOMAIN" -s > "$DOMAIN_OUTPUT_
 # valid domain names", i.e. drop IPs and wildcard SANs) — not "-d <domain>".
 _CERO()          { "$BIN_DIR/cero" -d "$BASE_DOMAIN" 2>/dev/null | sort -u > "$DOMAIN_OUTPUT_DIR/cero.out" || true; }
 _SUBLIST3R()     { python3 "$BIN_DIR/sublist3r/sublist3r.py" -d "$BASE_DOMAIN" -o "$DOMAIN_OUTPUT_DIR/sublister.out" > /dev/null 2>&1 || true; }
-_SUBDOMINATOR()  { subdominator -all -d "$BASE_DOMAIN" -s -o "$DOMAIN_OUTPUT_DIR/subdominator.out" > /dev/null 2>&1 || true; }
+# subdominator lives in a pipx venv symlinked into $BIN_DIR, which is NOT on
+# PATH — so the old bare `subdominator ...` was a "command not found" that
+# `|| true` swallowed, and this source reported "found: 0" on every run while
+# never executing. Resolve it the way the other sources do (TOOL_PATH prefers
+# $BIN_DIR, then PATH), matching the HAVE_TOOL gate that already let it through.
+#
+# It also reads provider API keys from $HOME/.config/Subdominator. scout runs as
+# root, so a config the user set up under their own home is invisible and every
+# provider comes back empty; borrow their HOME when root has no config of its own.
+_SUBDOMINATOR()  {
+  local BIN OUT="$DOMAIN_OUTPUT_DIR/subdominator.out" RUN_HOME="$HOME" UH
+  : > "$OUT"
+  BIN="$(TOOL_PATH subdominator)" || return 0
+  if [[ ! -f "$HOME/.config/Subdominator/provider-config.yaml" && -n "${SUDO_USER:-}" ]]; then
+    UH="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    [[ -n "$UH" && -f "$UH/.config/Subdominator/provider-config.yaml" ]] && RUN_HOME="$UH"
+  fi
+  HOME="$RUN_HOME" "$BIN" -all -d "$BASE_DOMAIN" -s -o "$OUT" > /dev/null 2>&1 || true
+}
 _CRTSH() {
   # crt.sh returns every identity CONTAINING the domain, so the plain form
   # already covers subdomains; "*.domain" and "%.domain" both 502 here.
@@ -80,11 +98,18 @@ _AMASS() {
 # scan dir of its own; we lift subdomains.txt out of it. Wrapped in `timeout`
 # because bbot has no built-in overall time bound.
 _BBOT() {
-  local OUT="$DOMAIN_OUTPUT_DIR/bbot.out" SCAN_DIR="$DOMAIN_OUTPUT_DIR/.bbot"
+  local OUT="$DOMAIN_OUTPUT_DIR/bbot.out" SCAN_DIR="$DOMAIN_OUTPUT_DIR/.bbot" BIN
   : > "$OUT"
-  command -v bbot >/dev/null 2>&1 || return 0
-  timeout "${SCOUT_BBOT_TIMEOUT:-900}" bbot -t "$BASE_DOMAIN" -p subdomain-enum -rf passive \
-    -om subdomains -o "$SCAN_DIR" -n scan -y --silent > /dev/null 2>&1 || true
+  # `command -v bbot` was always false: bbot is a pipx venv symlinked into
+  # $BIN_DIR, and $BIN_DIR is not on PATH. So this source returned early and
+  # reported "found: 0" on every run without ever invoking bbot — while the
+  # HAVE_TOOL gate upstream (which DOES check $BIN_DIR) happily marked it
+  # runnable. Resolve through TOOL_PATH so both layers agree.
+  BIN="$(TOOL_PATH bbot)" || return 0
+  # --no-deps: dependency installation is done once by the installer, not inside
+  # a timeout-bounded scan step where it would eat the budget and yield nothing.
+  timeout "${SCOUT_BBOT_TIMEOUT:-900}" "$BIN" -t "$BASE_DOMAIN" -p subdomain-enum -rf passive \
+    -om subdomains -o "$SCAN_DIR" -n scan -y --silent --no-deps > /dev/null 2>&1 || true
   [[ -f "$SCAN_DIR/scan/subdomains.txt" ]] &&
     _SUB_FILTER < "$SCAN_DIR/scan/subdomains.txt" > "$OUT"
   return 0
