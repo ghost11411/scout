@@ -4,38 +4,38 @@ IFS=$' \t\n'
 
 # ---------------- DEFAULT PATHS & SETTINGS ----------------
 VER="v0.1"
-# Hardcoded install locations. Scout is installed to, and run from, /opt/scout;
-# tools, wordlists and the resolver list live at fixed paths under it. These are
-# absolute literals on purpose — they do NOT depend on $HOME or the invoking
-# user, so `scout` finds the same toolset no matter who (root) runs it.
-INSTALL_DIR="/opt/scout"
-TOOLS_DIR="/opt/scout/tools"
-BIN_DIR="/opt/scout/tools/bin"
-WORDLISTS_DIR="/opt/scout/tools/wordlists"
-RESOLVERS_FILE="/opt/scout/tools/wordlists/resolvers.txt"
+# ---------------- SCRIPT LOCATION ----------------
+# Resolve where this script actually lives, and derive every install path from
+# it. readlink -f follows the /usr/local/bin/scout symlink the installer creates,
+# so this works however scout is invoked.
+#
+# SELF-LOCATING, not hardcoded. Scout used to pin these to /opt/scout, which
+# needs root to even create and is not writable by an ordinary user on most
+# distributions — so the whole tree (tools, wordlists, scan output) had to be
+# root-owned. The installer now puts it in the invoking user's home (~/scout),
+# and because the paths are derived from this file's own location the tree is
+# relocatable: move or copy it anywhere and scout still finds its own toolset.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+INSTALL_DIR="$SCRIPT_DIR"
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
+RESOLVERS_FILE="${WORDLISTS_DIR}/resolvers.txt"
 # gf resolves its pattern dir from the euid's passwd home + /.gf (ignores $HOME).
-# The pattern FILES are stored here under /opt/scout, and the passwd-home .gf
+# The pattern FILES are stored under the install tree, and the passwd-home .gf
 # (e.g. /root/.gf) is symlinked to $GF_HOME/.gf by GF_LINK_HOME (cmd/lib).
-GF_HOME="/opt/scout/tools/gf-home"
+GF_HOME="${TOOLS_DIR}/gf-home"
 # pipx installs subdominator/bbot/arjun into venvs under here (set by the
 # installer); scout only needs the symlinks in BIN_DIR, but the constant is kept
 # alongside the others so all install locations live in one place.
-PIPX_HOME="/opt/scout/tools/pipx"
-WORKSPACE_DIR="/opt/scout/workspace"
-
-# ---------------- SCRIPT LOCATION ----------------
-# Resolve where this script actually lives so scout works from any checkout,
-# and survives sudo resetting HOME. readlink -f follows the
-# /usr/local/bin/scout symlink the installer creates.
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-CMDS_DIR="${SCRIPT_DIR}/cmd"
-[[ -d "$CMDS_DIR" ]] || CMDS_DIR="${INSTALL_DIR}/cmd"
+PIPX_HOME="${TOOLS_DIR}/pipx"
+WORKSPACE_DIR="${INSTALL_DIR}/workspace"
+CMDS_DIR="${INSTALL_DIR}/cmd"
 
 # ---------------- SHARED LIB (colors, logging, spinner, banner, root check) ----------------
 source "${CMDS_DIR}/lib"
 
-# Scout must run as root: it installs to and runs from /opt/scout, and privileged
-# stages (raw-socket port scans) need it. REQUIRE_ROOT errors, prompts for the
+# Scout must run as root: privileged stages (raw-socket port scans) need it. REQUIRE_ROOT errors, prompts for the
 # password, and re-execs the whole invocation under sudo. Done before any work so
 # the re-exec restarts cleanly with the original arguments.
 REQUIRE_ROOT "$@"
@@ -638,6 +638,49 @@ ASSERT_NO_STAR "$OUTPUT_DIR/final_subdomains.out" "Final hosts" || true
 COUNT=$(COUNT_LINES "$OUTPUT_DIR/final_subdomains.out")
 INFO "Total unique subdomains collected: $COUNT"
 INFO "Final combined subdomains saved to: $OUTPUT_DIR/final_subdomains.out"
+
+# ---------------- URL/JS SCOPE ROOTS ----------------
+# The roots that URL and JS discovery iterate. Previously those stages read
+# wildcards_base.txt, so a plain -dm/-df domain was resolved and probed but got
+# NO URL or JS collection — and therefore no gf analysis, no parameter
+# discovery, no XSS and no OWASP sweep, because those stages read all_urls.out
+# and urls/gf. It was scanned at host level only, and nothing said so.
+#
+# Roots, not one entry per host: the archive sources widen to subdomains
+# themselves (`gau --subs <apex>`), and the crawlers seed from the live hosts
+# under each root. Looping every host in final_subdomains.out would fire one
+# gau + one waybackurls per host — ~10x the archive queries on a typical run —
+# for exactly the same coverage.
+SCOPE_ROOTS_FILE="$OUTPUT_DIR/scope_roots.txt"
+CAT_LINES "${INPUT_WILDCARD_BASE_FILE:-}" "${INPUT_DOMAIN_ALL_FILE:-}" > "$SCOPE_ROOTS_FILE" || true
+PREP_LIST "$SCOPE_ROOTS_FILE" "URL/JS roots"
+EXCLUDE_HOSTS "$SCOPE_ROOTS_FILE" "$EXCLUDE_ALL_FILE"
+export SCOPE_ROOTS_FILE
+if [[ -s "$SCOPE_ROOTS_FILE" ]]; then
+  INFO "URL/JS discovery roots: $(COUNT_LINES "$SCOPE_ROOTS_FILE") ($(tr '\n' ' ' < "$SCOPE_ROOTS_FILE" | cut -c1-100))"
+fi
+
+# Coverage tripwire. Every host reaching the active stages should sit under one
+# of those roots; one that does not gets host-level scanning only, with no
+# URL-driven testing. Say which, rather than leaving it to be inferred from an
+# empty findings file.
+UNCOVERED_N=0
+if [[ -s "$OUTPUT_DIR/final_subdomains.out" && -s "$SCOPE_ROOTS_FILE" ]]; then
+  UNCOVERED_LIST=$(awk '
+    NR==FNR { root[$0]=1; next }
+    { h=$0
+      if (h in root) next
+      s=h
+      while ((i=index(s,".")) > 0) { s=substr(s,i+1); if (s in root) next }
+      print h }' "$SCOPE_ROOTS_FILE" "$OUTPUT_DIR/final_subdomains.out" 2>/dev/null || true)
+  UNCOVERED_N=$(printf '%s' "$UNCOVERED_LIST" | grep -c . || true)
+fi
+if (( UNCOVERED_N > 0 )); then
+  WARN "$UNCOVERED_N host(s) are outside every URL/JS root — they get host-level"
+  WARN "  scanning (httpx/nuclei/takeover/ports) but NO URL, JS, parameter, XSS or"
+  WARN "  OWASP coverage. Pass them as -wc '*.<domain>' for full treatment:"
+  printf '%s\n' "$UNCOVERED_LIST" | head -n 5 | sed 's/^/      /' >&2
+fi
 echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
 
 # ---------------- HTTP PROBING (httpx) ----------------
@@ -659,13 +702,17 @@ elif [[ "${SCOUT_HTTP:-1}" != "1" ]]; then
 fi
 
 # ---------------- URL / JS COLLECTION ----------------
-# Both stages enumerate over the WILDCARD targets — they widen to subdomains
-# themselves (gau --subs, waybackurls) — so they read wildcards_base.txt, like
-# subdomain enumeration, and are skipped when only plain -dm/-df domains were
-# given (which are resolved, never enumerated). They hit remote archives and
-# can be slow, so each has an opt-out: SCOUT_URLS=0 / SCOUT_JS=0. Neither needs
-# DNS resolution, so they run regardless of DNS_READY.
-if [[ -n "$INPUT_WILDCARD_BASE_FILE" && -f "$INPUT_WILDCARD_BASE_FILE" ]]; then
+# Both stages iterate the SCOPE ROOTS — the wildcard bases plus the plain
+# -dm/-df domains — because the archive sources widen to subdomains themselves
+# (gau --subs, waybackurls) and the crawlers seed from the live hosts under each
+# root. This gate used to require a wildcard, so a run given only -dm/-df
+# skipped URL and JS collection entirely and, with it, gf analysis, parameter
+# discovery, XSS and the OWASP sweep — every stage downstream reads all_urls.out
+# or urls/gf. Gate on the roots file so a plain domain is treated like any other
+# scope. They hit remote archives and can be slow, so each has an opt-out:
+# SCOUT_URLS=0 / SCOUT_JS=0. Neither needs DNS resolution, so they run
+# regardless of DNS_READY.
+if [[ -n "${SCOPE_ROOTS_FILE:-}" && -s "$SCOPE_ROOTS_FILE" ]]; then
   if [[ "${SCOUT_URLS:-1}" == "1" ]]; then
     PHASE_BEGIN "URL Discovery"
     INFO "Collecting URLs (gau, waybackurls)..."

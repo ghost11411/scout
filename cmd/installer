@@ -9,25 +9,32 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # ---------------- VARIABLES ----------------
 VER="v0.1"
 REPO_URL="https://github.com/ghost11411/scout"
-# Hardcoded install locations — absolute literals, independent of $HOME, so the
-# installer and every `scout` run agree on where the toolset lives.
-INSTALL_DIR="/opt/scout"
-TOOLS_DIR="/opt/scout/tools"
-BIN_DIR="/opt/scout/tools/bin"
-WORDLISTS_DIR="/opt/scout/tools/wordlists"
-RESOLVERS_FILE="/opt/scout/tools/wordlists/resolvers.txt"
-GF_DIR="/opt/scout/tools/wordlists/GF-Patterns"
-SUBLISTER_DIR="/opt/scout/tools/bin/sublist3r"
+# Install locations, all derived from where THIS FILE sits (cmd/installer, so
+# the tree root is its parent's parent). They used to be absolute /opt/scout
+# literals, which required root just to create the directory and left the whole
+# tree — tools, wordlists and scan output — root-owned. configure now places the
+# tree in the invoking user's home (~/scout); deriving the paths from our own
+# location means the installer populates whatever tree it was unpacked into,
+# with no second place to keep in sync.
+SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+INSTALL_DIR="$(cd "${SELF_DIR}/.." && pwd)"
+TOOLS_DIR="${INSTALL_DIR}/tools"
+BIN_DIR="${TOOLS_DIR}/bin"
+WORDLISTS_DIR="${TOOLS_DIR}/wordlists"
+RESOLVERS_FILE="${WORDLISTS_DIR}/resolvers.txt"
+GF_DIR="${WORDLISTS_DIR}/GF-Patterns"
+SUBLISTER_DIR="${BIN_DIR}/sublist3r"
 # pipx: keep venvs (subdominator/bbot/arjun) and their app symlinks entirely
-# under /opt/scout instead of the running user's ~/.local. Exported so `pipx
-# install` below honours them. PIPX_BIN_DIR = BIN_DIR so the app entrypoints land
-# straight in the toolset bin dir; the functions also add an explicit symlink.
-PIPX_HOME="/opt/scout/tools/pipx"
-PIPX_BIN_DIR="/opt/scout/tools/bin"
+# inside the install tree instead of the running user's ~/.local. Exported so
+# `pipx install` below honours them. PIPX_BIN_DIR = BIN_DIR so the app
+# entrypoints land straight in the toolset bin dir; the functions also add an
+# explicit symlink.
+PIPX_HOME="${TOOLS_DIR}/pipx"
+PIPX_BIN_DIR="${BIN_DIR}"
 export PIPX_HOME PIPX_BIN_DIR
 # gf hardcodes $HOME/.gf, so patterns are mirrored into $GF_HOME/.gf and scout
 # runs gf with HOME=$GF_HOME (see cmd/analyze_urls).
-GF_HOME="/opt/scout/tools/gf-home"
+GF_HOME="${TOOLS_DIR}/gf-home"
 
 APT_PACKAGES=(
   git whois jq unzip python3 python3-pip python3-requests python3-dnspython gcc
@@ -102,13 +109,13 @@ WORDLISTS=(
 
 # ---------------- SHARED LIB (colors, logging, spinner, banner, root check) ----------------
 # Source relative to this script so the installer works from any checkout and
-# survives sudo resetting HOME.
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-source "${SCRIPT_DIR}/lib"
+# survives sudo resetting HOME. SELF_DIR was already resolved above, where the
+# install paths are derived from it.
+source "${SELF_DIR}/lib"
 
-# Installing into /opt/scout (root-owned) and the apt step both need root, so
-# root is mandatory. REQUIRE_ROOT errors, prompts for the password, and re-execs
-# under sudo. (configure normally re-execs first, so this is usually already root
+# The apt step needs root, so root is mandatory even though the tree itself now
+# lives in a user-writable home. REQUIRE_ROOT errors, prompts for the password,
+# and re-execs under sudo. (configure normally re-execs first, so this is usually already root
 # — but the installer self-guards when run directly.)
 REQUIRE_ROOT "$@"
 
@@ -138,7 +145,7 @@ CLEANUP() {
 trap CLEANUP SIGINT
 
 # ---------------- MAIN INSTALL ----------------
-# Runs as root (enforced by REQUIRE_ROOT above), installing into /opt/scout.
+# Runs as root (enforced by REQUIRE_ROOT above), installing into $INSTALL_DIR.
 # SUDO is therefore empty here; it is retained only so the command prefixes below
 # stay valid if the installer is ever adapted to run without the root guard.
 SUDO="$(MAYBE_SUDO)"
@@ -318,7 +325,7 @@ RUN_STEP sublist3r INSTALL_SUBLIST3R
 INSTALL_SUBDOMINATOR(){
   if ! NEED_INSTALL "$BIN_DIR/subdominator"; then STATUS="present"; return 0; fi
   # --force only when we mean it: it tears down and rebuilds the whole venv.
-  # PIPX_HOME/PIPX_BIN_DIR (exported above) keep the venv under /opt/scout.
+  # PIPX_HOME/PIPX_BIN_DIR (exported above) keep the venv in the install tree.
   pipx install subdominator ${SCOUT_REINSTALL:+--force} > /dev/null 2>&1 || true
   ln -sf "$PIPX_HOME/venvs/subdominator/bin/subdominator" "$BIN_DIR/subdominator" || true
   [[ -x "$BIN_DIR/subdominator" ]] && STATUS="success"
@@ -430,7 +437,7 @@ NUCLEI_HAS_TEMPLATES() {
 # directory. When that marker already names the current version, -ut prints
 # "No new updates found" and downloads NOTHING into <dir> — leaving an empty
 # store while exiting 0. That is the normal state on any machine where nuclei
-# has ever run, and on every `configure --force`, which wipes /opt/scout but
+# has ever run, and on every `configure --force`, which wipes the install tree but
 # not ~/.config/nuclei. The old code then looked for a .checksum that was never
 # created, so this step reported failure on every single run and
 # cmd/nuclei_scan's -automatic-scan was left pointed at an empty directory.
@@ -524,7 +531,7 @@ fi
 # gf hardcodes its pattern dir to the euid's passwd home + /.gf (ignores $HOME and
 # GF_PATTERNS) and cannot read the clone dir, so mirror the patterns into the
 # canonical store $GF_HOME/.gf and symlink the passwd-home .gf (e.g. /root/.gf)
-# to it via GF_LINK_HOME — keeping the actual files under /opt/scout.
+# to it via GF_LINK_HOME — keeping the actual files in the install tree.
 if compgen -G "$GF_DIR/*.json" > /dev/null 2>&1; then
   mkdir -p "$GF_HOME/.gf"
   cp -f "$GF_DIR"/*.json "$GF_HOME/.gf/" 2>/dev/null || true
@@ -726,8 +733,9 @@ VERIFY_INSTALL() {
 }
 VERIFY_INSTALL
 
-# ---------------- FIX OWNERSHIP & PERMISSIONS (/opt/scout) ----------------
-# The tree now lives under /opt/scout, which is root-owned, so a `sudo` install
+# ---------------- FIX OWNERSHIP & PERMISSIONS ----------------
+# The tree lives in the invoking user's home, but a `sudo` install writes it as
+# root, so
 # leaves every file owned by root. An unprivileged `scout` run then cannot write
 # scan output under workspace/ (and, depending on umask, may not traverse the
 # tree). Runs last, after everything above has been created, so it covers the

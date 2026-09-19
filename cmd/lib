@@ -392,7 +392,7 @@ EOF
 
 # ---------------- PRIVILEGE ESCALATION ----------------
 # Scout runs as root (enforced by REQUIRE_ROOT — it installs to and runs from
-# /opt/scout). MAYBE_SUDO is therefore normally a no-op, retained so any remaining
+# ~/scout). MAYBE_SUDO is therefore normally a no-op, retained so any remaining
 # `$(MAYBE_SUDO) <cmd>` prefixes stay correct if a command is ever reached in a
 # non-root context.
 #
@@ -405,7 +405,7 @@ MAYBE_SUDO() {
 }
 
 # REQUIRE_ROOT enforces that Scout runs as root. Scout installs to and runs from
-# /opt/scout (root-owned) and several stages need privileged access, so root is
+# ~/scout and several stages need privileged access, so root is
 # mandatory. When not already root we print an error, then re-exec the caller
 # under `sudo -E` — which prompts for the password ("ask for auth") and preserves
 # the SCOUT_* environment — and proceed as root. Call it as REQUIRE_ROOT "$@" so
@@ -423,7 +423,7 @@ REQUIRE_ROOT() {
 
 # GF_LINK_HOME <store>: gf resolves its pattern dir from the euid's passwd-home
 # + /.gf (it ignores $HOME and GF_PATTERNS), so to keep the actual pattern files
-# under /opt/scout we point that path at <store>. Symlink it when the path is
+# under the install tree we point that path at <store>. Symlink it when the path is
 # absent or already a symlink; if a real directory already exists there, copy the
 # patterns into it instead (never clobber a user's real ~/.gf). Always returns 0.
 GF_LINK_HOME() {

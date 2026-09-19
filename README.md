@@ -98,9 +98,10 @@ sudo apt update && sudo apt install curl -y
 curl -sL https://raw.githubusercontent.com/ghost11411/scout/main/configure | bash
 ```
 
-You do not need to prefix this with `sudo`. Scout installs into `/opt/scout` and
-needs root, so `configure` re-runs itself under `sudo` and prompts for your
-password.
+You do not need to prefix this with `sudo`. Scout installs into `~/scout` (the
+invoking user's home) and still needs root for the package step, so `configure`
+re-runs itself under `sudo` and prompts for your password. Set `SCOUT_HOME` to
+install somewhere else.
 
 ---
 

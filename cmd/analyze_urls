@@ -14,7 +14,7 @@ IFS=$' \t\n'
 #   urls/url_domains.txt     — the distinct hosts seen in those URLs.
 #
 # gf hardcodes its pattern dir to the euid's passwd home + /.gf and ignores $HOME
-# and GF_PATTERNS. To keep the pattern FILES under /opt/scout, scout stores them
+# and GF_PATTERNS. To keep the pattern FILES inside the install tree, scout stores them
 # in $GF_HOME/.gf and symlinks the passwd-home .gf (e.g. /root/.gf) to that store
 # via GF_LINK_HOME (cmd/lib). _SYNC_GF_PATTERNS does both on demand, so the stage
 # self-heals even if the install predates the installer step. When GF_HOME is

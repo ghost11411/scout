@@ -35,9 +35,25 @@ BRANCH="main"
 # Canonical URL of THIS script, used to re-fetch it when re-execing under sudo
 # in remote mode (where there is no local file to re-exec).
 SELF_URL="https://raw.githubusercontent.com/ghost11411/scout/${BRANCH}/configure"
-# Hardcoded install locations — absolute literals, independent of $HOME.
-INSTALL_DIR="/opt/scout"
-WORKSPACE_DIR="/opt/scout/workspace"
+# Install location: the INVOKING USER's home, not /opt.
+#
+# /opt is root-owned and not writable by an ordinary user on most distributions,
+# which forced the whole tree — tools, wordlists and scan output — to be
+# root-owned and created a permission problem on every install.
+#
+# "$HOME/scout" is NOT good enough here: this script re-execs itself under
+# `sudo` (root is still needed for apt and for raw-socket port scans), and sudo
+# commonly resets HOME to /root — so a plain $HOME would put the tree in root's
+# home on the sudo path and the user's home otherwise, i.e. two different
+# locations for the same command. Resolve the real invoking user through
+# SUDO_USER and read their home from passwd, so both paths agree.
+SCOUT_USER="${SUDO_USER:-$(id -un)}"
+SCOUT_USER_HOME="$(getent passwd "$SCOUT_USER" 2>/dev/null | cut -d: -f6)"
+# Fall back to $HOME only if passwd has nothing useful (unusual, e.g. a
+# container with no passwd entry for the uid).
+[[ -n "$SCOUT_USER_HOME" && -d "$SCOUT_USER_HOME" ]] || SCOUT_USER_HOME="$HOME"
+INSTALL_DIR="${SCOUT_HOME:-$SCOUT_USER_HOME/scout}"
+WORKSPACE_DIR="${INSTALL_DIR}/workspace"
 FORCE=0
 UPDATE=0
 UNINSTALL=0

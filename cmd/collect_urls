@@ -61,13 +61,18 @@ COLLECT_URLS(){
   local RUNNERS=(_URL_GAU _URL_WAYBACK _URL_KATANA _URL_HAKRAWLER)
   local RUNNER
 
-  # wildcards_base.txt, not wildcards_all.txt: the base list is the star-free
-  # one every stage is allowed to read. Guard the file before the redirect —
-  # `done < ""` (both vars empty, i.e. no usable wildcards) is not a no-op under
-  # `set -e`, it aborts the whole run with "ambiguous redirect".
-  local WC_FILE="${INPUT_WILDCARD_BASE_FILE:-${INPUT_WILDCARD_ALL_FILE:-}}"
+  # scope_roots.txt (built by scout): the wildcard bases PLUS the plain -dm/-df
+  # domains. Reading wildcards_base.txt here meant a plain domain got no URL
+  # collection at all, and so no gf analysis, parameter discovery, XSS or OWASP
+  # sweep — those stages read all_urls.out / urls/gf. Falls back to the wildcard
+  # lists so this stage still works if called directly.
+  #
+  # Every entry is star-free and already scope-filtered; guard the file before
+  # the redirect, because `done < ""` is not a no-op under `set -e` — it aborts
+  # the whole run with "ambiguous redirect".
+  local WC_FILE="${SCOPE_ROOTS_FILE:-${INPUT_WILDCARD_BASE_FILE:-${INPUT_WILDCARD_ALL_FILE:-}}}"
   if [[ -z "$WC_FILE" || ! -f "$WC_FILE" ]]; then
-    WARN "No wildcard targets to collect URLs for."
+    WARN "No targets to collect URLs for."
     return 0
   fi
 
