@@ -137,8 +137,15 @@ _CHAOS() {
 # Hostnames seen in archived URLs (Wayback / Common Crawl / OTX). gau is
 # already installed for the JS/URL stages; --subs makes it report subdomains
 # of the target rather than only the exact host.
+# Third gau call site (the others are in cmd/collect_urls and cmd/collect_js),
+# and it needs the same provider pin: gau's DEFAULT provider set includes
+# `commoncrawl`, which refuses connections while gau still exits 0, so the run
+# pays a dead provider's timeouts and silently loses results. Pinning the
+# providers that answer took the same binary from 1 URL to 800 on a control
+# domain. SCOUT_GAU_PROVIDERS overrides; default is set in cmd/collect_urls.
 _GAU_SUBS() {
-  echo "$BASE_DOMAIN" | "$BIN_DIR/gau" --subs --threads 5 --timeout 30 2>/dev/null |
+  echo "$BASE_DOMAIN" | "$BIN_DIR/gau" --subs --threads 5 --timeout 30 \
+      --providers "${SCOUT_GAU_PROVIDERS:-wayback,otx,urlscan}" --retries 2 2>/dev/null |
     _SUB_FILTER > "$DOMAIN_OUTPUT_DIR/gau.out" || true
 }
 
