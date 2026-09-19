@@ -23,12 +23,36 @@ IFS=$' \t\n'
 #     domain (httpx's live_hosts.txt), capped by SCOUT_URL_CRAWL_LIMIT, apex
 #     fallback. See cmd/collect_js for the same pattern and the katana `-jc` /
 #     hakrawler `-u -subs` flag notes.
-_URL_GAU()       { "$BIN_DIR/gau" --subs "$BASE_DOMAIN" > "$URL_DIR/gau.out" 2>/dev/null || true; }
-_URL_WAYBACK()   { echo "$BASE_DOMAIN" | "$BIN_DIR/waybackurls" > "$URL_DIR/wayback.out" 2>/dev/null || true; }
+#
+# FAILURE REPORTING: none of these swallow their exit status any more. They used
+# to end in `2>/dev/null || true`, which made "this source found nothing" and
+# "this source never ran" the same observable event — an empty file and a
+# success line. That is not hypothetical: `commoncrawl`, one of gau's FOUR
+# DEFAULT providers, refuses connections ("dial tcp4 54.237.141.66:80: connect:
+# connection refused"); gau logs it as a *warning*, exits 0, and a whole run can
+# lose its entire archive corpus while reporting success. Caught only because a
+# run's gau.out and wayback.out were both 0 bytes while katana returned 776KB.
+#
+# So: pin gau to the providers that actually answer (override with
+# SCOUT_GAU_PROVIDERS), bound every source with a wall clock, send stderr to a
+# per-source .err file the caller can quote, and let the exit status through.
+SCOUT_GAU_PROVIDERS="${SCOUT_GAU_PROVIDERS:-wayback,otx,urlscan}"
+SCOUT_ARCHIVE_TIMEOUT="${SCOUT_ARCHIVE_TIMEOUT:-180}"
+
+_URL_GAU()       { timeout "$SCOUT_ARCHIVE_TIMEOUT" "$BIN_DIR/gau" --subs \
+                     --providers "$SCOUT_GAU_PROVIDERS" --retries 2 --timeout 30 \
+                     "$BASE_DOMAIN" > "$URL_DIR/gau.out" 2>"$URL_DIR/gau.err"; }
+_URL_WAYBACK()   { echo "$BASE_DOMAIN" | timeout "$SCOUT_ARCHIVE_TIMEOUT" "$BIN_DIR/waybackurls" \
+                     > "$URL_DIR/wayback.out" 2>"$URL_DIR/wayback.err"; }
+# Crawlers: `set -o pipefail` is on, so a grep that matches NOTHING would exit 1
+# and read as a tool failure. Neutralise only that stage — the tool's own status
+# still propagates.
 _URL_KATANA()    { "$BIN_DIR/katana" -list "$URL_SEEDS" -jc -silent -d "${SCOUT_KATANA_DEPTH:-3}" -fs rdn \
-                     "${KATANA_ARGS[@]}" 2>/dev/null | grep -iE "$URL_SCOPE_RE" | sort -u > "$URL_DIR/katana.out" || true; }
+                     "${KATANA_ARGS[@]}" 2>"$URL_DIR/katana.err" \
+                     | { grep -iE "$URL_SCOPE_RE" || true; } | sort -u > "$URL_DIR/katana.out"; }
 _URL_HAKRAWLER() { "$BIN_DIR/hakrawler" -u -subs -insecure -d "${SCOUT_HAKRAWLER_DEPTH:-2}" \
-                     "${HAKRAWLER_ARGS[@]}" < "$URL_SEEDS" 2>/dev/null | grep -iE "$URL_SCOPE_RE" | sort -u > "$URL_DIR/hakrawler.out" || true; }
+                     "${HAKRAWLER_ARGS[@]}" < "$URL_SEEDS" 2>"$URL_DIR/hakrawler.err" \
+                     | { grep -iE "$URL_SCOPE_RE" || true; } | sort -u > "$URL_DIR/hakrawler.out"; }
 
 COLLECT_URLS(){
   RAW_DIR="$OUTPUT_DIR/urls"
@@ -99,10 +123,30 @@ COLLECT_URLS(){
         *)              tname="${RUNNER#_URL_}"; cfile=""; ccmd="$RUNNER";;
       esac
       START_SPINNER "${RUNNER#_URL_} on $BASE_DOMAIN"
-      "$RUNNER" || true
+      # Capture the status instead of discarding it — `|| rc=$?` keeps `set -e`
+      # happy while still telling us whether the source actually ran.
+      local rc=0 n efile
+      "$RUNNER" || rc=$?
       STOP_SPINNER
-      OK "${RUNNER#_URL_} done (${ELAPSED}s, $(COUNT_LINES "$cfile") urls)"
-      REC_TOOL "$tname" "${ELAPSED:-0}" "$(COUNT_LINES "$cfile")" "$ccmd"
+      n="$(COUNT_LINES "$cfile")"
+      efile="${cfile%.out}.err"
+      if (( rc != 0 )); then
+        # 124 is timeout(1)'s "killed at the deadline".
+        if (( rc == 124 )); then
+          WARN "${RUNNER#_URL_} TIMED OUT after ${SCOUT_ARCHIVE_TIMEOUT}s — kept $n url(s); raise SCOUT_ARCHIVE_TIMEOUT"
+        else
+          WARN "${RUNNER#_URL_} FAILED (exit $rc, ${ELAPSED}s, $n urls) — this source contributed nothing"
+          [[ -s "$efile" ]] && WARN "  ${RUNNER#_URL_}: $(head -n 1 "$efile" | cut -c1-160)"
+        fi
+      elif (( n == 0 )); then
+        # Ran clean and genuinely found nothing. Worth saying out loud: for the
+        # archive sources a silent zero used to be indistinguishable from a dead
+        # provider, which is exactly the bug this block exists to surface.
+        WARN "${RUNNER#_URL_} returned 0 urls (${ELAPSED}s) — source reachable but had no data for $BASE_DOMAIN"
+      else
+        OK "${RUNNER#_URL_} done (${ELAPSED}s, $n urls)"
+      fi
+      REC_TOOL "$tname" "${ELAPSED:-0}" "$n" "$ccmd"
     done
   done < "$WC_FILE"
 

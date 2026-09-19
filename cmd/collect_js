@@ -30,12 +30,29 @@ IFS=$' \t\n'
 # Safe-mode rate limiting, a per-URL timeout and SCOUT_UA are added in COLLECT_JS.
 _JS_RE='\.js([?#]|$)'
 
-_JS_GAU()       { "$BIN_DIR/gau" --subs "$BASE_DOMAIN" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/gau_js.out" || true; }
-_JS_WAYBACK()   { echo "$BASE_DOMAIN" | "$BIN_DIR/waybackurls" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/wayback_js.out" || true; }
+# Same archive-source handling as cmd/collect_urls, and for the same reason: gau's
+# default provider set includes `commoncrawl`, which refuses connections while gau
+# still exits 0 — so `2>/dev/null || true` reported success over an empty corpus.
+# (Observed together: gau_js.out and wayback_js.out both 0 bytes while katana
+# returned 445KB.) Pin the working providers, bound the wall clock, keep stderr,
+# and let the exit status reach the caller. The `|| true` survives only on the
+# grep stage, where "no matches" is a legitimate empty result rather than a fault.
+SCOUT_GAU_PROVIDERS="${SCOUT_GAU_PROVIDERS:-wayback,otx,urlscan}"
+SCOUT_ARCHIVE_TIMEOUT="${SCOUT_ARCHIVE_TIMEOUT:-180}"
+
+_JS_GAU()       { timeout "$SCOUT_ARCHIVE_TIMEOUT" "$BIN_DIR/gau" --subs \
+                    --providers "$SCOUT_GAU_PROVIDERS" --retries 2 --timeout 30 \
+                    "$BASE_DOMAIN" 2>"$JS_DIR/gau_js.err" \
+                    | { grep -iE "$_JS_RE" || true; } | sort -u > "$JS_DIR/gau_js.out"; }
+_JS_WAYBACK()   { echo "$BASE_DOMAIN" | timeout "$SCOUT_ARCHIVE_TIMEOUT" "$BIN_DIR/waybackurls" \
+                    2>"$JS_DIR/wayback_js.err" \
+                    | { grep -iE "$_JS_RE" || true; } | sort -u > "$JS_DIR/wayback_js.out"; }
 _JS_KATANA()    { "$BIN_DIR/katana" -list "$JS_SEEDS" -jc -silent -d "${SCOUT_KATANA_DEPTH:-3}" \
-                    "${KATANA_ARGS[@]}" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/katana_js.out" || true; }
+                    "${KATANA_ARGS[@]}" 2>"$JS_DIR/katana_js.err" \
+                    | { grep -iE "$_JS_RE" || true; } | sort -u > "$JS_DIR/katana_js.out"; }
 _JS_HAKRAWLER() { "$BIN_DIR/hakrawler" -u -subs -insecure -d "${SCOUT_HAKRAWLER_DEPTH:-2}" \
-                    "${HAKRAWLER_ARGS[@]}" < "$JS_SEEDS" 2>/dev/null | grep -iE "$_JS_RE" | sort -u > "$JS_DIR/hakrawler_js.out" || true; }
+                    "${HAKRAWLER_ARGS[@]}" < "$JS_SEEDS" 2>"$JS_DIR/hakrawler_js.err" \
+                    | { grep -iE "$_JS_RE" || true; } | sort -u > "$JS_DIR/hakrawler_js.out"; }
 
 COLLECT_JS(){
   RAW_DIR="$OUTPUT_DIR/js"
@@ -108,10 +125,26 @@ COLLECT_JS(){
         *)             tname="${RUNNER#_JS_}";  cfile=""; ccmd="$RUNNER";;
       esac
       START_SPINNER "${RUNNER#_JS_} on $BASE_DOMAIN"
-      "$RUNNER" || true
+      # Keep the status (see the runner comments): an empty file alone cannot
+      # tell "no JS archived" from "the source never answered".
+      local rc=0 n efile
+      "$RUNNER" || rc=$?
       STOP_SPINNER
-      OK "${RUNNER#_JS_} done (${ELAPSED}s, $(COUNT_LINES "$cfile") js)"
-      REC_TOOL "$tname" "${ELAPSED:-0}" "$(COUNT_LINES "$cfile")" "$ccmd"
+      n="$(COUNT_LINES "$cfile")"
+      efile="${cfile%.out}.err"
+      if (( rc != 0 )); then
+        if (( rc == 124 )); then
+          WARN "${RUNNER#_JS_} TIMED OUT after ${SCOUT_ARCHIVE_TIMEOUT}s — kept $n js url(s); raise SCOUT_ARCHIVE_TIMEOUT"
+        else
+          WARN "${RUNNER#_JS_} FAILED (exit $rc, ${ELAPSED}s, $n js) — this source contributed nothing"
+          [[ -s "$efile" ]] && WARN "  ${RUNNER#_JS_}: $(head -n 1 "$efile" | cut -c1-160)"
+        fi
+      elif (( n == 0 )); then
+        WARN "${RUNNER#_JS_} returned 0 js urls (${ELAPSED}s) — source reachable but had no data for $BASE_DOMAIN"
+      else
+        OK "${RUNNER#_JS_} done (${ELAPSED}s, $n js)"
+      fi
+      REC_TOOL "$tname" "${ELAPSED:-0}" "$n" "$ccmd"
     done
   done < "$WC_FILE"
 
