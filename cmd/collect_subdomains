@@ -46,7 +46,22 @@ _SUBDOMINATOR()  {
     UH="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
     [[ -n "$UH" && -f "$UH/.config/Subdominator/provider-config.yaml" ]] && RUN_HOME="$UH"
   fi
-  HOME="$RUN_HOME" "$BIN" -all -d "$BASE_DOMAIN" -s -o "$OUT" > /dev/null 2>&1 || true
+  # Flags for subdominator v3.x: `--all` (long form — `-all` is an argparse
+  # abbreviation that silently depends on no other `-a*` flag existing), and NO
+  # `-s`. There is no `-s`/`--silent` in v3; it now collides with five flags and
+  # the tool aborts before doing any work:
+  #     error: ambiguous option: -s could match -sh, -ss, -srs, -sd, -scp
+  # That error went to /dev/null for who knows how long, so this source reported
+  # "found: 0 subdomains" while never performing a lookup. With it removed the
+  # same call returns 82 subdomains for a target that previously yielded none —
+  # and that is with an EMPTY provider config, purely from keyless resources.
+  local ERR_F="${OUT%.out}.err" RC=0
+  HOME="$RUN_HOME" "$BIN" --all -d "$BASE_DOMAIN" -o "$OUT" > /dev/null 2>"$ERR_F" || RC=$?
+  if (( RC != 0 )); then
+    WARN "subdominator failed (exit $RC) — this source contributed nothing"
+    [[ -s "$ERR_F" ]] && WARN "  subdominator: $(grep -m1 -iE 'error|usage' "$ERR_F" | cut -c1-160)"
+  fi
+  return 0
 }
 _CRTSH() {
   # crt.sh returns every identity CONTAINING the domain, so the plain form
