@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ---------------- RESULT BROWSER ----------------
+# `scout serve` — a read-only web UI over the result database.
+#
+# Binds 127.0.0.1 by default and there is NO authentication: anyone who can
+# reach the port can read every host, URL and finding you have ever collected.
+# cmd/web/app.py refuses any other bind address unless SCOUT_SERVE_UNSAFE=1.
+
+_SERVE_DB(){ printf '%s' "${SCOUT_DB_PATH:-${WORKSPACE_DIR:-.}/scout.db}"; }
+_SERVE_PID(){ printf '%s' "${WORKSPACE_DIR:-.}/.serve.pid"; }
+_SERVE_LOG(){ printf '%s' "${WORKSPACE_DIR:-.}/.serve.log"; }
+
+_SERVE_USAGE(){
+cat <<EOF
+Usage: scout serve [options] | stop | status
+
+  --port <N>     Port to listen on (default 8787)
+  --host <addr>  Bind address (default 127.0.0.1; anything else needs
+                 SCOUT_SERVE_UNSAFE=1 — there is no authentication)
+  -d, --daemon   Run in the background (pid file under the workspace)
+  stop           Stop a backgrounded server
+  status         Report whether one is running
+
+Database: $(_SERVE_DB)
+EOF
+}
+
+# Only kill a pid that is still OUR server. Pids get recycled, and this runs as
+# root — killing a stale pid could take down something unrelated.
+_SERVE_IS_OURS(){
+  local pid="$1"
+  [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'app\.py'
+}
+
+SERVE_MAIN(){
+  local PORT=8787 HOST=127.0.0.1 DAEMON=0 DB PIDF LOGF PY APP pid
+  DB="$(_SERVE_DB)"; PIDF="$(_SERVE_PID)"; LOGF="$(_SERVE_LOG)"
+
+  case "${1:-}" in
+    -h|--help|help) _SERVE_USAGE; return 0 ;;
+    status)
+      pid="$(cat "$PIDF" 2>/dev/null || true)"
+      if _SERVE_IS_OURS "$pid"; then OK "scout serve running (pid $pid)"; return 0; fi
+      INFO "scout serve is not running"; return 1 ;;
+    stop)
+      pid="$(cat "$PIDF" 2>/dev/null || true)"
+      if _SERVE_IS_OURS "$pid"; then
+        kill "$pid" 2>/dev/null && OK "Stopped scout serve (pid $pid)"
+        rm -f "$PIDF"
+        return 0
+      fi
+      WARN "No scout serve process found (stale pid file removed if present)"
+      rm -f "$PIDF" 2>/dev/null || true
+      return 1 ;;
+  esac
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port) PORT="${2:-}"; shift 2 ;;
+      --host) HOST="${2:-}"; shift 2 ;;
+      -d|--daemon) DAEMON=1; shift ;;
+      --db) DB="${2:-}"; shift 2 ;;
+      *) ERR "Unknown serve option: $1"; _SERVE_USAGE; return 1 ;;
+    esac
+  done
+
+  PY="$(command -v python3 2>/dev/null || true)"
+  [[ -n "$PY" ]] || { ERR "python3 is required for 'scout serve'."; return 1; }
+  APP="$CMDS_DIR/web/app.py"
+  [[ -f "$APP" ]] || { ERR "Missing $APP"; return 1; }
+  if [[ ! -f "$DB" ]]; then
+    ERR "No database at $DB"
+    INFO "Run a scan, or record existing runs with: scout db backfill --all"
+    return 1
+  fi
+
+  if (( DAEMON )); then
+    pid="$(cat "$PIDF" 2>/dev/null || true)"
+    if _SERVE_IS_OURS "$pid"; then
+      WARN "Already running (pid $pid) — 'scout serve stop' first."
+      return 1
+    fi
+    setsid "$PY" "$APP" --db "$DB" --port "$PORT" --host "$HOST" \
+      > "$LOGF" 2>&1 < /dev/null &
+    pid=$!
+    printf '%s\n' "$pid" > "$PIDF"
+    sleep 1
+    if _SERVE_IS_OURS "$pid"; then
+      OK "scout serve running at http://${HOST}:${PORT} (pid $pid)"
+      INFO "Log: $LOGF   Stop: scout serve stop"
+      return 0
+    fi
+    ERR "Server failed to start — see $LOGF"
+    tail -n 5 "$LOGF" 2>/dev/null >&2 || true
+    rm -f "$PIDF"
+    return 1
+  fi
+
+  INFO "Serving $DB at http://${HOST}:${PORT}  (Ctrl-C to stop)"
+  "$PY" "$APP" --db "$DB" --port "$PORT" --host "$HOST"
+}

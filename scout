@@ -44,6 +44,11 @@ REQUIRE_ROOT "$@"
 # so "total time" in the report reflects the entire invocation. NOW is fork-free.
 NOW SCOUT_SCRIPT_START
 
+# The invocation, captured before the parse loop consumes it, for the run
+# manifest. REQUIRE_ROOT re-execs with "$@", so this is the post-re-exec argv —
+# which is the one that actually produced this run.
+SCOUT_ARGV=("$@")
+
 # ---------------- ARGS ----------------
 INPUT_DOMAIN=""
 INPUT_DOMAIN_FILE=""
@@ -90,6 +95,13 @@ Flags:
   -h, --help         Show this help
   -v, --version      Show version information
   install [action]   Run installer (actions: update | force | uninstall)
+  db <action>        Result database (ingest | backfill | stats | new | path | prune | verify)
+  serve [--port N]   Browse the result database at http://127.0.0.1:8787
+
+Environment:
+  SCOUT_DB=0                 Skip recording this run in the database
+  SCOUT_DB_PATH=<file>       Use a different database file
+  SCOUT_DB_URLS=0            Skip the URL corpus when recording (volume)
 EOF
   exit 0
 }
@@ -168,6 +180,19 @@ while [[ $# -gt 0 ]]; do
         esac
         ;;
 
+    db)
+        # Sourced lazily here, not via the SOURCE_CMD block far below, which
+        # only runs after target validation and output-dir creation.
+        shift
+        if [[ ! -f "${CMDS_DIR}/db" ]]; then ERR "Missing ${CMDS_DIR}/db"; exit 1; fi
+        source "${CMDS_DIR}/db"
+        DB_MAIN "$@"; exit $? ;;
+    serve)
+        shift
+        if [[ ! -f "${CMDS_DIR}/serve" ]]; then ERR "Missing ${CMDS_DIR}/serve"; exit 1; fi
+        source "${CMDS_DIR}/serve"
+        SERVE_MAIN "$@"; exit $? ;;
+
     -h|--help) USAGE ;;
     -v|--version)
       echo -e "${BOLD}Version:${RESET} ${VER}"
@@ -193,6 +218,11 @@ else
   OUTPUT_DIR="$WORKSPACE_DIR/output_$CURRENTDATE"
 fi
 mkdir -p "$OUTPUT_DIR"
+# Give the run an identity immediately. SCOUT_RUN_UID — not the directory name —
+# is what identifies it: reusing `-o <name>` overwrites the previous run's files
+# on disk, and without a uid that older run would simply vanish from the record
+# instead of remaining as its own distinct run.
+RUN_MANIFEST_WRITE running
 
 # ---------------- TELEMETRY ----------------
 # Per-tool and per-phase timing/command logs the HTML report is built from.
@@ -210,6 +240,14 @@ CLEANUP() {
     kill "$SPINNER_PID" 2>/dev/null || true
   fi
   echo -ne "\r\033[K"
+  # A run still marked "running" at exit died somewhere unplanned. Record that,
+  # so the database can refuse to ingest it as if it were a complete picture.
+  # Guarded: CLEANUP must never fail or exit.
+  if [[ -n "${OUTPUT_DIR:-}" && -f "${OUTPUT_DIR:-/nonexistent}/.scout_run.json" ]]; then
+    grep -q '"status":"running"' "$OUTPUT_DIR/.scout_run.json" 2>/dev/null \
+      && RUN_MANIFEST_WRITE failed 2>/dev/null || true
+  fi
+  return 0
 }
 
 # ON_INTERRUPT runs on Ctrl+C (SIGINT) or SIGTERM and STOPS THE WHOLE RUN
@@ -233,6 +271,10 @@ ON_INTERRUPT() {
   # Ctrl+C the terminal already SIGINT'd the whole foreground group, so the tool
   # is usually gone by now anyway — this just catches anything that ignored it.
   pkill -TERM -P $$ 2>/dev/null || true
+  # Mark the run interrupted before leaving: a partial run must not be ingested
+  # as a complete one, or every asset its stages never reached would look like
+  # it had vanished.
+  RUN_MANIFEST_WRITE interrupted 2>/dev/null || true
   exit 130
 }
 trap ON_INTERRUPT SIGINT SIGTERM
@@ -510,6 +552,7 @@ SOURCE_CMD "github_dork"
 SOURCE_CMD "port_scan"
 SOURCE_CMD "service_scan"
 SOURCE_CMD "screenshot"
+SOURCE_CMD "persist"
 SOURCE_CMD "report"
 
 # ---------------- SAFETY / RULES-OF-ENGAGEMENT DEFAULTS ----------------
@@ -846,6 +889,21 @@ fi
 # report reads the whole-run clock, so export the total seconds for it.
 NOW SCOUT_SCRIPT_END
 export SCOUT_TOTAL_SECONDS=$(( SCOUT_SCRIPT_END - SCOUT_SCRIPT_START ))
+# The run finished: record that before anything reads it back. cmd/persist and
+# cmd/scoutdb.py refuse to ingest a run that cannot prove it completed, because
+# a partial run's unreached stages would otherwise look like assets that vanished.
+RUN_MANIFEST_WRITE complete
+
+# Persist BEFORE reporting: the report renders diff/summary.tsv, so the deltas
+# have to exist first. REPORT never touches the database itself, so a database
+# failure costs the diff panel and nothing else.
+if [[ "${SCOUT_DB:-1}" == "1" ]]; then
+  PHASE_BEGIN "Persist & Diff"
+  PERSIST || WARN "Persist/diff failed — scan results in $OUTPUT_DIR are unaffected."
+  PHASE_END
+  echo -e "${BOLD}${CYAN}──────────────────────────────────────────────────────────────────────────${RESET}\n"
+fi
+
 PHASE_BEGIN "Reporting"
 REPORT
 PHASE_END

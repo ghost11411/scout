@@ -108,6 +108,77 @@ TELEMETRY_INIT(){
   return 0
 }
 
+# ---------------- RUN MANIFEST ----------------
+# .scout_run.json is the run's own record of itself: identity, status, argv and
+# the SCOUT_* toggles that were in force. cmd/persist and cmd/scoutdb.py refuse
+# to ingest a run that cannot prove it finished, and read the toggles to tell
+# "this stage was switched off" apart from "this stage found nothing".
+#
+# printf only — no jq, no python. This has to work on a box where the tooling
+# is broken, which is exactly when knowing what a run did matters most.
+_JSON_ESC(){                       # stdin/arg -> JSON-safe string body
+  local s="${1-}"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"; s="${s//$'\r'/\\r}"; s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
+}
+
+# SCOUT_RUN_UID identifies the run, NOT its directory name. `-o name` reuse
+# overwrites a previous run's files on disk; a uid keeps both runs distinct and
+# correctly attributed in the database instead of the older one vanishing.
+RUN_UID_INIT(){
+  [[ -n "${SCOUT_RUN_UID:-}" ]] && return 0
+  SCOUT_RUN_UID="$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')"
+  [[ -n "$SCOUT_RUN_UID" ]] || SCOUT_RUN_UID="$(date +%s)-$$"
+  export SCOUT_RUN_UID
+  return 0
+}
+
+# RUN_MANIFEST_WRITE <running|complete|interrupted|failed>
+# Always returns 0: it is called from traps, where failing is not an option.
+RUN_MANIFEST_WRITE(){
+  local status="${1:-running}" f t first=1
+  [[ -n "${OUTPUT_DIR:-}" && -d "${OUTPUT_DIR:-/nonexistent}" ]] || return 0
+  RUN_UID_INIT
+  f="$OUTPUT_DIR/.scout_run.json"
+  {
+    printf '{"schema":1'
+    printf ',"run_uid":"%s"' "$(_JSON_ESC "$SCOUT_RUN_UID")"
+    printf ',"status":"%s"' "$(_JSON_ESC "$status")"
+    printf ',"started_at":%s' "${SCOUT_SCRIPT_START:-0}"
+    if [[ -n "${SCOUT_SCRIPT_END:-}" ]]; then
+      printf ',"ended_at":%s,"total_seconds":%s' \
+        "$SCOUT_SCRIPT_END" "${SCOUT_TOTAL_SECONDS:-0}"
+    else
+      printf ',"ended_at":null,"total_seconds":null'
+    fi
+    printf ',"output_dir":"%s"' "$(_JSON_ESC "$OUTPUT_DIR")"
+    printf ',"scout_version":"%s"' "$(_JSON_ESC "${VER:-}")"
+    printf ',"host":"%s"' "$(_JSON_ESC "$(hostname 2>/dev/null || echo unknown)")"
+    printf ',"safe":%s' "${SCOUT_SAFE:-1}"
+    printf ',"ua":"%s"' "$(_JSON_ESC "${SCOUT_UA:-}")"
+    printf ',"argv":['
+    for t in ${SCOUT_ARGV+"${SCOUT_ARGV[@]}"}; do
+      (( first )) || printf ','
+      first=0
+      printf '"%s"' "$(_JSON_ESC "$t")"
+    done
+    printf ']'
+    printf ',"toggles":{'
+    first=1
+    for t in SCOUT_SAFE SCOUT_HTTP SCOUT_URLS SCOUT_ANALYZE SCOUT_JS \
+             SCOUT_JS_ANALYZE SCOUT_NUCLEI SCOUT_TAKEOVER SCOUT_PARAMS \
+             SCOUT_XSS SCOUT_OWASP SCOUT_FFUF SCOUT_PORTSCAN SCOUT_SCREENSHOTS \
+             SCOUT_FAVICON SCOUT_GITHUB_DORK SCOUT_ASN; do
+      (( first )) || printf ','
+      first=0
+      printf '"%s":"%s"' "$t" "$(_JSON_ESC "${!t-}")"
+    done
+    printf '}}\n'
+  } > "$f" 2>/dev/null || true
+  return 0
+}
+
 # PHASE_BEGIN <human title> — mark the start of a pipeline phase. Sets
 # SCOUT_PHASE (which REC_TOOL stamps onto every tool row) and remembers the
 # start time for PHASE_END. Also emits a heading rule so the terminal output is

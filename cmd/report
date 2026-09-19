@@ -359,6 +359,44 @@ HTML_HEAD
     printf '</section>\n'
 
     # ---- Assets ----
+    # ---- New since first seen (from cmd/persist; absent if SCOUT_DB=0) ----
+    # Reads diff/summary.tsv ONLY — the report never touches the database, so a
+    # database failure costs this panel and nothing else.
+    #
+    # Three distinct states per row, never conflated: a count, "not run
+    # (reason)", or zero. A stage that did not run must never render as 0 —
+    # that conflation is exactly the bug this project keeps rediscovering.
+    if [[ -s "$O/diff/summary.tsv" ]]; then
+      printf '<section class="panel"><h2>New since first seen</h2>'
+      printf '<p class="muted">An asset is <strong>new</strong> only if it has never been recorded for this target in any previous run.</p>'
+      printf '<div class="tablewrap"><table>'
+      printf '<tr><th>Asset type</th><th>New</th><th>Seen this run</th><th>Status</th></tr>'
+      while IFS=$'\t' read -r _k _st _tot _new _prior; do
+        [[ -n "${_k:-}" ]] || continue
+        if [[ "$_tot" == "-" ]]; then
+          printf '<tr><td>%s</td><td class="mono">—</td><td class="mono">—</td><td><span class="sev-info">not run (%s)</span></td></tr>' \
+            "$(_ESC "$_k")" "$(_ESC "$_st")"
+        elif [[ "${_new:-0}" -gt 0 ]]; then
+          printf '<tr><td>%s</td><td class="mono"><strong>+%s</strong></td><td class="mono">%s</td><td>ran</td></tr>' \
+            "$(_ESC "$_k")" "$(_ESC "$_new")" "$(_ESC "$_tot")"
+        else
+          printf '<tr><td>%s</td><td class="mono">0</td><td class="mono">%s</td><td>ran</td></tr>' \
+            "$(_ESC "$_k")" "$(_ESC "$_tot")"
+        fi
+      done < "$O/diff/summary.tsv"
+      printf '</table></div>'
+      if [[ -s "$O/diff/new_subdomains.txt" ]]; then
+        printf '<h3>New subdomains</h3><div class="tablewrap"><table>'
+        while IFS= read -r _h; do
+          [[ -n "${_h:-}" ]] && printf '<tr><td class="mono">%s</td></tr>' "$(_ESC "$_h")"
+        done < <(head -n 200 "$O/diff/new_subdomains.txt")
+        printf '</table></div>'
+        (( $(COUNT_LINES "$O/diff/new_subdomains.txt") > 200 )) &&
+          printf '<p class="muted">Showing the first 200; full list in diff/new_subdomains.txt</p>'
+      fi
+      printf '</section>'
+    fi
+
     printf '<section class="panel"><h2>Assets discovered</h2><div class="tablewrap"><table>'
     printf '<tr><th>Stage</th><th>Count</th><th>File</th></tr>'
     _ASSET_ROW "Combined subdomains" "$O/subdomains/combined_subdomains.txt"

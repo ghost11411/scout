@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# ---------------- PERSIST & DIFF ----------------
+# Records this run in the result database and writes the first-seen deltas into
+# $OUTPUT_DIR/diff/ so cmd/report can show "what is new" without the report
+# itself ever touching the database.
+#
+# "New" means NEVER SEEN BEFORE for this target, in any prior run — not
+# "absent from the previous run". A source that drops a host and recovers it
+# (assetfinder went 63 -> 13 -> 13 across three real runs) must not re-alert.
+#
+# All database work happens in cmd/scoutdb.py. This stage only: prepares the
+# inputs python cannot derive, invokes it, and reports. It never aborts a run —
+# scanning is already finished by the time it runs, so a database problem must
+# cost the diff and nothing else.
+
+SCOUT_DB_DEFAULT(){ printf '%s' "${SCOUT_DB_PATH:-${WORKSPACE_DIR:-.}/scout.db}"; }
+
+PERSIST(){
+  local DB DIFF PY RC=0
+  DB="$(SCOUT_DB_DEFAULT)"
+  DIFF="$OUTPUT_DIR/diff"
+  mkdir -p "$DIFF" 2>/dev/null || true
+
+  PY="$(command -v python3 2>/dev/null || true)"
+  if [[ -z "$PY" ]]; then
+    WARN "python3 not found — cannot record this run in the database."
+    WARN "  Scan results in $OUTPUT_DIR are unaffected."
+    return 1
+  fi
+  if [[ ! -f "$CMDS_DIR/scoutdb.py" ]]; then
+    WARN "Missing $CMDS_DIR/scoutdb.py — skipping persistence."
+    return 1
+  fi
+
+  # ports/ filenames are SAFE_NAME(host), and SAFE_NAME is NOT reversible
+  # ("a:b" and "a/b" both become "a_b"). Build the map in the direction that IS
+  # well-defined — host -> safe — and hand it over, so the ingester never has
+  # to guess a hostname back out of a filename.
+  local PMAP="$DIFF/.portmap.tsv" H
+  : > "$PMAP" 2>/dev/null || true
+  if [[ -d "$OUTPUT_DIR/ports" && -s "$OUTPUT_DIR/final_subdomains.out" ]]; then
+    while IFS= read -r H; do
+      [[ -n "$H" ]] && printf '%s\t%s\n' "$(SAFE_NAME "$H")" "$H"
+    done < "$OUTPUT_DIR/final_subdomains.out" >> "$PMAP" 2>/dev/null || true
+  fi
+
+  START_SPINNER "Recording run in $(basename "$DB")"
+  "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" ingest \
+        --run-dir "$OUTPUT_DIR" --port-map "$PMAP" --diff-out "$DIFF" \
+        > "$DIFF/ingest.log" 2> "$DIFF/ERROR.txt" || RC=$?
+  STOP_SPINNER
+
+  if (( RC != 0 )); then
+    WARN "Database ingest failed (exit $RC)."
+    [[ -s "$DIFF/ERROR.txt" ]] && WARN "  $(head -n 1 "$DIFF/ERROR.txt" | cut -c1-160)"
+    WARN "  Scan results in $OUTPUT_DIR are unaffected."
+    return 1
+  fi
+  rm -f "$DIFF/ERROR.txt" 2>/dev/null || true
+
+  REC_TOOL "scoutdb (ingest)" "${ELAPSED:-0}" \
+           "$(COUNT_LINES "$DIFF/new_subdomains.txt")" \
+           "scoutdb.py ingest --run-dir <run> --diff-out diff/"
+
+  _PERSIST_REPORT "$DIFF" "$DB"
+  return 0
+}
+
+# Print the per-kind deltas. Three distinct outcomes per kind, never conflated:
+# a count, "not run (reason)", or nothing new. A stage that did not run must
+# never be reported as 0 — that conflation is this project's endemic bug.
+_PERSIST_REPORT(){
+  local DIFF="$1" DB="$2" kind status total new prior ANY=0 FIRST=0
+  [[ -s "$DIFF/summary.tsv" ]] || { OK "Run recorded in $DB"; return 0; }
+
+  while IFS=$'\t' read -r kind status total new prior; do
+    [[ -n "$kind" ]] || continue
+    (( prior == 0 )) && FIRST=1
+    if [[ "$total" == "-" ]]; then
+      continue                      # not run; listed together below
+    fi
+    if (( new > 0 )); then
+      ANY=1
+      OK "  new ${kind}: ${new} (of ${total} seen this run)"
+    fi
+  done < "$DIFF/summary.tsv"
+
+  if (( FIRST )); then
+    INFO "First recorded run for this target — everything is new by definition."
+  elif (( ANY == 0 )); then
+    OK "No new assets since the last run."
+  fi
+
+  if [[ -s "$DIFF/not_run.txt" ]]; then
+    local n; n="$(COUNT_LINES "$DIFF/not_run.txt")"
+    WARN "${n} asset type(s) not recorded because their stage did not run — see diff/not_run.txt"
+  fi
+  OK "Run recorded in $DB (deltas in $DIFF)"
+  return 0
+}

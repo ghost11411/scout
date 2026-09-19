@@ -43,6 +43,10 @@ APT_PACKAGES=(
   # coreutils supplies the `timeout` that bounds the bbot run in
   # cmd/collect_subdomains.
   python3-dev python3-venv build-essential libssl-dev libffi-dev coreutils dnsutils
+  # sqlite3 is for inspecting the result database by hand. NOTHING depends
+  # on the CLI: cmd/scoutdb.py uses python's stdlib sqlite3 module, so the
+  # database works even if this package is missing.
+  sqlite3
 )
 
 GO_TOOLS=(

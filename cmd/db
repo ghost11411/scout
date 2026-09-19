@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# ---------------- RESULT DATABASE CLI ----------------
+# `scout db <action>` — everything you can do to the result database by hand.
+# Ingestion also happens automatically at the end of every scan (cmd/persist);
+# this exists for backfilling runs that predate the database, re-ingesting after
+# a schema change, and inspecting what has been recorded.
+#
+# All real work is in cmd/scoutdb.py. This is argument plumbing and messages.
+
+_DB_PATH(){ printf '%s' "${SCOUT_DB_PATH:-${WORKSPACE_DIR:-.}/scout.db}"; }
+
+_DB_PY(){
+  local PY; PY="$(command -v python3 2>/dev/null || true)"
+  if [[ -z "$PY" ]]; then
+    ERR "python3 is required for the result database but was not found."
+    return 1
+  fi
+  if [[ ! -f "$CMDS_DIR/scoutdb.py" ]]; then
+    ERR "Missing $CMDS_DIR/scoutdb.py"
+    return 1
+  fi
+  printf '%s' "$PY"
+}
+
+_DB_USAGE(){
+cat <<EOF
+Usage: scout db <action> [options]
+
+  ingest <run-dir>        Record one run directory (idempotent)
+  backfill --all          Record every run directory under the workspace
+  backfill --dir <path>   Record specific run directories
+  stats                   Targets, runs and asset counts
+  new --run <uid>         What was first seen in a given run
+  path                    Print the database file path
+  prune --keep <N>        Drop per-run rows for all but the newest N runs
+                          (assets and their first-seen dates are kept)
+  verify                  Schema version and integrity check
+
+Options accepted by ingest/backfill:
+  --allow-partial         Ingest a run that did not complete
+  --legacy                Synthesize a manifest for a pre-database run
+  --dry-run               Backfill: list what would be ingested
+
+The database lives at:  $(_DB_PATH)
+Override with SCOUT_DB_PATH.
+EOF
+}
+
+DB_MAIN(){
+  local ACTION="${1:-}" PY DB RC=0
+  [[ $# -gt 0 ]] && shift || true
+  DB="$(_DB_PATH)"
+
+  case "$ACTION" in
+    ""|-h|--help|help) _DB_USAGE; return 0 ;;
+    path)              printf '%s\n' "$DB"; return 0 ;;
+  esac
+
+  PY="$(_DB_PY)" || return 1
+
+  case "$ACTION" in
+    ingest)
+      local RUN_DIR="${1:-}"
+      [[ -n "$RUN_DIR" ]] || { ERR "ingest needs a run directory."; _DB_USAGE; return 1; }
+      [[ -d "$RUN_DIR" ]] || { ERR "No such run directory: $RUN_DIR"; return 1; }
+      shift
+      INFO "Ingesting $RUN_DIR"
+      "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" ingest --run-dir "$RUN_DIR" \
+            --diff-out "$RUN_DIR/diff" "$@" || RC=$?
+      ;;
+    backfill)
+      INFO "Backfilling from ${WORKSPACE_DIR:-.}"
+      "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" backfill \
+            --workspace "${WORKSPACE_DIR:-.}" "$@" || RC=$?
+      ;;
+    stats|verify)
+      "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" "$ACTION" || RC=$?
+      ;;
+    new)
+      "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" new "$@" || RC=$?
+      ;;
+    prune)
+      "$PY" "$CMDS_DIR/scoutdb.py" --db "$DB" prune "$@" || RC=$?
+      ;;
+    *)
+      # Same precedent as `scout install`: an unknown action is an error, never
+      # a silent default. A silent default there once turned every documented
+      # invocation into a failed fresh install.
+      ERR "Unknown db action: $ACTION"
+      _DB_USAGE
+      return 1
+      ;;
+  esac
+
+  (( RC == 0 )) || ERR "db $ACTION failed (exit $RC)"
+  return $RC
+}
